@@ -56,7 +56,8 @@ one too. The Stacks page keeps showing every stack as today, so nothing someone 
   go with it (as the stack today).
 - **Archived when the job is done**: the run reaches done (`job.flow.done`), or, for a job with no flow, its stage is
   the list's last stage. Archived feeds are left out of the sidebar and out of the workspace sent to the app (a team
-  with 2,000 jobs doesn't send 2,000 feeds on every change); `GET /jobs/:id/chat` returns it. A new message in it, or an
+  with 2,000 jobs doesn't send 2,000 feeds on every change), and so are their items; `GET /jobs/:id/chat` returns the
+  feed and its items (§8.9). A new message in it, or an
   owner or admin pressing Reopen, takes it out of the archive. Its items stay where they are.
 - Messages in a job's chat notify as any feed's do today (mentions, push). No customer is ever in it.
 
@@ -89,4 +90,79 @@ jobs_tab_ui, member_access_ui.
 - Taking the Stacks page out of the sidebar (it still works and still lists every stack; the owner decides once
   everyone's used the tabs).
 - Customers in a job's chat; texting the customer from it (the job's customer messages stay where they are).
-- Per-reader archived-feed item loading (archived feeds' items still come with the app's state, as all items do today).
+- Moving or detaching a feed's stack (400, §8.6).
+
+## 8. Review round 1 (ChatGPT, chat #10): not approved yet; the 14 changes, and what the contract now says
+1. **Job feeds fail closed.** `seesFeed(ch)` with `ch.recordId`: the record exists, is in the feed's workspace, is a job
+   record (`JF.isJobRecord`), and `PJ.recordAt(rec.id, ws.id, memberId)` passes; anything missing → false for everyone
+   (owners and admins included, as the job itself). A job feed never carries `memberIds` or `campaignId`: made without
+   them, PATCH can't add them (400), and `seesFeed` returns false if one is ever there.
+2. **One link, checked both ways.** `linkFeedStack(ws, ch, st)` is the only writer of `ch.stackId`/`st.channelId`. It
+   links only when both are in `ws`, neither points elsewhere (`!ch.stackId || ch.stackId === st.id`, same for
+   `st.channelId`), and the audiences match: a job feed ↔ that job's stack (`st.recordId === ch.recordId`); a campaign
+   feed ↔ that campaign's stack (same `campaignId`); a plain feed ↔ a stack made for it (no `recordId`, `campaignId`);
+   a standalone team stack ↔ a team-wide feed made for it. Anything else is refused and left as it is (never
+   overwritten), logged once; the feed's Files then shows only its own non-message items. A linked stack is seen only if
+   **both** `seesFeed(its feed)` and its own rule (job, campaign) pass.
+3. **Made once, whole.** One function, `JF.ensureChat(ws, rec)`, synchronous from lookup to `save()` (no `await`
+   between), so two calls in the same process can't both create. Keys: one feed per `recordId`, one stack per
+   `recordId` (Phase 4). It finds or makes the stack, finds or makes the feed, links them, pins the job, in that one
+   turn: a feed without a stack or the reverse can't be left behind (a throw before `save()` leaves nothing written;
+   the next call finishes). Kloomie runs as one process (CLAUDE.md), so there's no second server. Every path calls it;
+   the team switch only decides whether the automatic call happens.
+4. **Cascade.** Deleting the job (or its list or board) goes through `recordGoneAll` → `jobStackGone`, which today
+   deletes the stack's items outright and purges their Trash entries (no restore into a wider place); it now does the
+   same for the feed: the feed's items (messages, replies, files, folders, docs, sealed cards), the feed, its pins, the
+   job's pins in other feeds (Phase 4), request links on the stack (they 404 once the stack is gone), share links on the
+   items (gone with the items). One synchronous turn, so there's no half-deleted state to reach. Unread counts are
+   kept by the app and drop with the feed.
+5. **Losing a job loses its chat everywhere.** Every read goes through `seesFeed` (feed lists, `canSee('item')` via
+   `feedOfItem`, search, export, chat pins, share-link making, the public API, `validChannel` for posting and uploads) or
+   `seesStack` (stack routes, request links' owner pages). `reseeJob` already sends `resync` to anyone whose access to
+   a job with a stack changed; it does so for a job with a feed too, and `record:gone` closes it in the app (§8.14).
+   Gaining the job: `resync` brings the feed and its items.
+6. **Standalone stacks.** Only a team-wide stack (no `recordId`, `campaignId`, `channelId`) gets a feed, and it's
+   team-wide: same audience, nothing widens. A stack in an invite-only feed is never made from an existing one (a plain
+   feed's stack is always new). Moving a stack to another feed or detaching it isn't in this piece: 400. Items keep
+   today's rules (someone who can see a file can copy it elsewhere, as now).
+7. **Migration.** Runs at startup per team while `ws.chatStacks !== 1`: for each campaign, link its feed and stack (rule
+   2); for each standalone team stack with no feed, make one (`freeChannelName`, so a clash with an existing feed name
+   gets `-2`). Each step checks first (a stack already linked is skipped), the whole team is done in one synchronous
+   turn and saved once with the marker, so a restart part-way redoes nothing twice. One process, so no two at once.
+8. **What each tab holds**, each item once per tab (deduped by id):
+   - Chat: top-level items with `channelId === feed` (messages and anything dropped into the conversation).
+   - Files: items with `channelId === feed` that aren't messages, plus top-level items with `stackId === feed.stackId` and
+     no `channelId`.
+   - All: Chat ∪ Files.
+   A file dropped into the conversation shows in Chat, Files and All (once in each). Order: `createdAt`, then `id`.
+   Replies stay in threads, as today.
+9. **Archive is how it looks, not who sees it.** Archived job feeds and their items are left out of the app's state
+   (workspace and items), and still pass the same `seesFeed` check everywhere else: item routes, search and export
+   include them for people who see the job. `GET /jobs/:id/chat` returns `{ feed, items }` (job visibility and the
+   member Chat switch first). A search hit in one opens the job's chat. A member who loses the job loses its archived
+   chat as well.
+10. **Archive and reopen, in order.** Archiving happens once, at the done transition (`job.flow.done`, or the stage
+    reaching the last one), recorded as `ch.archived = { at, for: <that transition> }`; the sweep never archives again
+    for the same transition. A message posted into it, or Reopen, clears it; it's archived again only at a new done
+    transition (the run reopened and finished again). Everything runs in the one event loop, so a message that
+    succeeds can't be undone by an older archive write.
+11. **The two switches.**
+    | Make a chat for each new job | Chat for members | What happens |
+    |---|---|---|
+    | on | on | feed made with the job; everyone who sees the job uses it |
+    | off | on | no feed until someone who sees the job taps 💬 (`POST /jobs/:id/chat` makes it) |
+    | on | off | feed made; owners and admins use it; members see 💬 marked "Chat is off for members" and every feed route answers 403 for them |
+    | off | off | as above, made on demand by owners and admins only |
+    `POST /jobs/:id/chat` and `GET /jobs/:id/chat` check job visibility first (404, the same answer as a job that
+    doesn't exist), then the Chat switch (403).
+12. **Renames.** The job renamed: the feed's slug is made again with `channelName(ws, name, ch.id)` (it may keep its own
+    name), `-2`, `-3`… on a clash; the stack's name follows (40 characters). Archived feeds aren't in sidebar lists or
+    counts.
+13. **One place jobs are made.** projects.js gets `jobMade(rec)` (a ctx hook), called from `recordNews` for
+    `record.created` and from the bulk import (1713), which is every path that makes a record today; Job Flows' handler
+    checks the list is a job list and the switch, then `ensureChat`. And a safety net: the `jobSteps` sweep makes the
+    feed for any job made since the switch was turned on (`createdAt >= ws.jobChatsSince`) that has none, so a future
+    path that forgets the hook is caught within a sweep.
+14. **In the app, losing the job while its chat is open** (Phase 5's `record:gone` / `jbGone`): the chat, its split or
+    sheet close; the feed, its stack and their items leave the app's state; a drag or upload aimed at them is dropped;
+    the Files tab never shows what's cached; the toast "You no longer have this job".
