@@ -245,3 +245,24 @@ someone on the job, nothing for a member who isn't). §8.9 corrected: the app's 
   (`rec.chatBroken`, kept out of the record sent to the app). A message reaches nobody with Chat off for members live
   either (the broadcast checks `chatOffFor` for any message, as state does), #general included. Tests for both.
 - Round 2: an existing job chat whose link breaks is no longer named by the job (`rec.chatId` cleared; the feed and stack left as they are), with a test; the conflict test asserts the exact feed id.
+- Checkpoint 3 APPROVED (server round 3, ChatGPT chat #10).
+
+## 12. Checkpoint 4: the app (as built, commit cbe96a8)
+- Every feed's head has `.ch-tabs` (All · Chat · Files). `feedTab(view)` reads `column.feedTab:<feed id | general>`.
+  `itemsFor(view, tab)`: Chat as before; Files = the feed's non-message items plus its stack's top-level items (no
+  `channelId`); All = both; deduped by id, ordered by `createdAt` then `id`. #general's Files = everything not in a
+  feed (today's Files view).
+- Opening Files on a feed with no stack asks `POST /channels/:id/stack` first, so `destOf(view)` then points the
+  composer, uploads and drops at the stack (`{ stackId }`). A note typed on Files is a note (`text`), as in a stack.
+  Files has its own filter bar (`PF['<view>#files']`); Chat and All have none, as before. Uploads into the stack show
+  on Files while they go.
+- `jbChatBtn(x)`: 💬 with the unread count (@ for a mention) on `.jb-row`, the run card's head, and the not-on-a-flow
+  card (members get that card only for the chat). `jbChatBadges()` updates every 💬 when something arrives or is read.
+  `jbOpenChat(id, chatId, tab)`: a missing feed is fetched (`GET /jobs/:id/chat`, archived ones with their items, kept
+  until the next workspace) or made (`POST`); it opens in the split beside the job whatever page was last (`openSplit`
+  + `openChannel`). The job's 📁 Files opens that chat on Files. Members with Chat off get a toast.
+- Losing the job (`record:gone` → `jbGone`): its feed, stack and their items leave the app's state, a drag from them is
+  dropped, the chat goes back to #general if it was open, the shelf closes; the resync that follows reloads state.
+- Tests: jobchat_ui.mjs passes; chat_tab_ui, tools_chat_ui, stacks_bottom_ui, pinsplit_ui, chatpanelsui, chatpinsui,
+  camp_builder_ui, campaign_views_ui, mobile_shell_ui, jobs_ui, jobs_tab_ui, member_access_ui pass; dupnames, dom_null
+  and ci.sh pass.
