@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 const appsOpen = async (A, id) => {
   await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=apps]').click(); true`);
   await A.until(`!!document.querySelector('#apps .apps-tabs')`);
-  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Tools' : 'Apps')}).click(); true`);
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Kloomie apps' : 'Integrations')}).click(); true`);
   if (id === 'dev' || id === 'tools') return;
   await A.until(`!!document.querySelector('#apps .app-tile[data-app="${id}"]')`);
   await A.ev(`document.querySelector('#apps .app-tile[data-app="${id}"]').click(); true`);

@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 const appsOpen = async (A, id) => {
   await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=apps]').click(); true`);
   await A.until(`!!document.querySelector('#apps .apps-tabs')`);
-  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Tools' : 'Apps')}).click(); true`);
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === ${JSON.stringify(id === 'dev' ? 'Developers' : id === 'tools' ? 'Kloomie apps' : 'Integrations')}).click(); true`);
   if (id === 'dev' || id === 'tools') return;
   await A.until(`!!document.querySelector('#apps .app-tile[data-app="${id}"]')`);
   await A.ev(`document.querySelector('#apps .app-tile[data-app="${id}"]').click(); true`);
@@ -150,8 +150,8 @@ await A.tap(`[...document.querySelectorAll('#settings .vis-sec button')].find((b
 ok(await A.until(`document.querySelector('#settings .vis-sec .on')?.textContent === 'Only what’s theirs' && document.querySelector('#settings .vis-sec .day-hint').textContent.includes('only campaigns, tasks and files that are theirs')`), 'choosing Only what’s theirs saves and explains it');
 // Tools: a new team starts simple; switching one on puts it in the Tools menu
 await appsOpen(A, 'tools'); // Tools is in Apps & Integrations (2026-11-20)
-ok(await A.until(`document.querySelector('#apps .tool-tile[data-tool=map] input')?.checked === false`), 'Map starts off for a new team');
-await A.ev(`document.querySelector('#apps .tool-tile[data-tool=map] input').click()`);
+ok(await A.until(`document.querySelector('#apps .kapp-tile[data-kapp=map]')?.dataset.state === 'off'`), 'Map starts off for a new team');
+await A.ev(`document.querySelector('#apps .kapp-tile[data-kapp=map] .kapp-act').click()`);
 await sleep(600);
 await A.ev(`document.querySelector('#settings').classList.add('hidden'); document.querySelector('#tabs [data-tab=tools]').click()`);
 ok(await A.until(`!!document.querySelector('#menu [data-tool=map]')`), 'switched on, Map is in Workspace → Tools');

@@ -74,7 +74,7 @@ try {
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=apps]')`, 15000);
-  await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); [...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations')?.click(); true`);
   ok(await A.until(`!!document.querySelector('#apps .app-tile[data-app=companycam]') && document.querySelector('#apps .app-tile[data-app=companycam]').dataset.state === 'off'`), 'CompanyCam is a live tile, not connected yet');
   await A.ev(`document.querySelector('#apps .app-tile[data-app=companycam]').click(); true`);
   ok(await A.until(`!!document.querySelector('#apps .app-detail .cc-token') && document.querySelector('#apps .app-detail .cc-steps').textContent.includes('Access tokens')`), 'it says where to get a token in CompanyCam, with a box to paste it');

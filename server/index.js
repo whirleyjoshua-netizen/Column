@@ -598,7 +598,7 @@ const memberOff = (k) => `Your team’s owners and admins have turned ${MEMBER_L
 // Why this person can't use a tool, or null: off for the whole team, or off for members. Doors that aren't a route
 // (the agents' tools) ask this, so they follow the same two rules.
 function offWhy(ws, memberId, k) {
-  if (TOOL_KEYS.includes(k) && !toolsOf(ws)[k]) return `${MEMBER_LABEL[k] || { email: 'Email' }[k] || k} is switched off for this team (Apps & Integrations → Tools).`;
+  if (TOOL_KEYS.includes(k) && !toolsOf(ws)[k]) return `${MEMBER_LABEL[k] || { email: 'Email' }[k] || k} is switched off for this team (Apps & Integrations → Kloomie apps).`;
   if (Object.hasOwn(MEMBER_DEFAULTS, k) && !memberMay(ws, { memberId, role: ws.members.find((m) => m.id === memberId)?.role }, k)) return memberOff(k);
   return null;
 }

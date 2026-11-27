@@ -231,7 +231,7 @@ export function jobFlowsModule(ctx) {
         x.templateFrom = { id: t.id, name: t.name };
       }
       if (st.kind === 'work' && x.useStock) {
-        if (!toolsOf(ws).inventory) throw bad(`“${st.name}” uses stock from Inventory. Turn the Inventory tool on first (Apps & Integrations → Tools).`);
+        if (!toolsOf(ws).inventory) throw bad(`“${st.name}” uses stock from Inventory. Turn the Inventory tool on first (Apps & Integrations → Kloomie apps).`);
         const pl = db.invPlaces?.[x.fromPlace];
         if (!pl || pl.wsId !== ws.id) throw bad(`Pick the Inventory place “${st.name}” uses stock from.`);
       }
@@ -243,7 +243,7 @@ export function jobFlowsModule(ctx) {
     let open = false;
     for (const st of body.steps) {
       if (st.kind !== 'gearOut' && st.kind !== 'gearIn') continue;
-      if (!toolsOf(ws).inventory) throw bad('Gear steps use Inventory. Turn the Inventory tool on first (Apps & Integrations → Tools).');
+      if (!toolsOf(ws).inventory) throw bad('Gear steps use Inventory. Turn the Inventory tool on first (Apps & Integrations → Kloomie apps).');
       if (st.kind === 'gearOut') { if (open) throw bad(`“${st.name}” comes right after another check-out. Put both in one check-out, or check the gear in between.`); open = true; }
       else { if (!open) throw bad(`“${st.name}” needs a Gear check-out before it.`); open = false; }
     }
@@ -996,7 +996,7 @@ export function jobFlowsModule(ctx) {
   async function route(req, res, parts, auth, ws) {
     const [a, b, c, d, e] = parts;
     if (a !== 'jobs' && a !== 'job-flows' && a !== 'job-items') return null;
-    if (!toolsOf(ws).projects) return send(res, 403, { error: 'Boards are switched off for this team (Apps & Integrations → Tools).' });
+    if (!toolsOf(ws).projects) return send(res, 403, { error: 'Boards are switched off for this team (Apps & Integrations → Kloomie apps).' });
     const m = req.method;
     const admin = isAdmin(auth);
     try {

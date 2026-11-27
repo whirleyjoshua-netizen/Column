@@ -56,7 +56,7 @@ try {
   const A = await tab(APP);
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   const signIn = async (tok) => { await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(tok)})); location.reload(); true`); await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000); };
-  const openPage = async () => { await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); true`); await A.until(`!!document.querySelector('#apps .app-tile[data-app=postiz]')`); };
+  const openPage = async () => { await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); [...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations')?.click(); true`); await A.until(`!!document.querySelector('#apps .app-tile[data-app=postiz]')`); };
   const tileSt = (id) => A.ev(`document.querySelector('#apps .app-tile[data-app=${id}]')?.dataset.state || ''`);
 
   await signIn(a.token);

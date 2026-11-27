@@ -208,7 +208,7 @@ export function whiteboardModule({ db, save, send, readJson, cleanText, rid, bro
   async function route(req, res, parts, auth, ws) {
     const [, id, act] = parts;
     const m = req.method;
-    if (!toolsOf(ws).whiteboard) return send(res, 403, { error: 'Whiteboard is switched off for this team (Apps & Integrations → Tools).' });
+    if (!toolsOf(ws).whiteboard) return send(res, 403, { error: 'Whiteboard is switched off for this team (Apps & Integrations → Kloomie apps).' });
     if (!memberMay(ws, auth, 'whiteboard')) return send(res, 403, { error: 'Your team’s owners and admins have turned Whiteboard off for members.' });
     const mine = () => Object.values(db.boards).filter((b) => b.wsId === ws.id);
     if (!id && m === 'GET') {
