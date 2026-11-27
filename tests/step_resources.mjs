@@ -43,7 +43,7 @@ try {
   ok(r.status === 200 && rs.map((x) => x.kind).join() === 'note,doc,template,link', 'the owner adds a script, a doc, a template and a link (a bad link, another team’s doc and nonsense are left off): ' + rs.map((x) => x.kind).join());
   ok(rs[0].title === 'Call script' && rs[0].text === 'Hi, this is Maria from the shop.\nAsk about the windows.' && rs.every((x) => x.id), 'the script keeps its words (line breaks tidied), and each has an id');
   ok((await sam('PATCH', '/goals/' + g.id, { resources: [] })).status === 403, 'a member can’t change what a step hands over');
-  ok((await sam('PATCH', '/goals/' + g.id, { title: 'Call last year’s customers' })).status === 200, '(a member still edits the step as before)');
+  ok((await sam('PATCH', '/goals/' + g.id, { title: 'Call last year’s customers' })).status === 403, '(nor rename it: only whoever runs the campaign, or an admin, changes its plan, 2026-11-27)');
   const seen = (await sam('GET', '/state')).body.goals?.find((x) => x.id === g.id);
   ok(seen && seen.resources?.length === 4, 'a member sees the step’s resources');
   // Saved, then run again: the resources come too.

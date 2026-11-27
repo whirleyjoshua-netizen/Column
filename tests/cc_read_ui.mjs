@@ -72,7 +72,7 @@ try {
   const row = (id) => `document.querySelector('#camps .cc-rrow[data-task="${id}"]')`;
   ok(await A.ev(`!!${row(mine.id)} && !!${row(theirs.id)}`), 'with its tasks');
   ok(await A.ev(`!${row(mine.id)}.querySelector('.check').disabled`), 'my task can be ticked');
-  ok(await A.ev(`${row(theirs.id)}.querySelector('.check').disabled`), 'someone else’s can’t');
+  ok(await A.ev(`!${row(theirs.id)}.querySelector('.check').disabled`), 'and one nobody is on yet');
 
   // ---- ticking my own ----
   await A.ev(`${row(mine.id)}.querySelector('.check').click(); true`);
@@ -87,7 +87,6 @@ try {
   ok(await A.until(`!!document.querySelector('#sheet:not(.hidden) .task-read[data-task="${theirs.id}"]')`), 'a task opens as a card to read');
   ok(await A.ev(`document.querySelector('#sheet .task-read').textContent.includes('Ask about the patio')`), 'with its details');
   ok(!(await A.ev(`!!document.querySelector('#sheet .task-read .win-title, #sheet .task-read .td-desc, #sheet .task-read .td-del, #sheet .task-read input[type=date]')`)), 'nothing to change on it');
-  ok(await A.ev(`document.querySelector('#sheet .task-read .check')?.disabled === true`), 'not mine: no tick');
   ok(await A.ev(`!!document.querySelector('#sheet .task-read .tr-edit')`), 'and Edit task');
   await A.ev(`document.querySelector('#sheet .task-read .tr-edit').click(); true`);
   ok(await A.until(`!!document.querySelector('#sheet:not(.hidden) .task-win .win-title')`), 'Edit task opens it to change');
@@ -128,6 +127,26 @@ try {
   ok(await A.until(`!!${T('.cc-read')} && ${T('.cc-name')}.textContent === 'Fall Tune-ups'`), 'another campaign opens to be read');
   ok(await A.ev(`${T('.cc-read')}.textContent.includes('No phases yet')`), 'an empty one says so');
   void other;
+  // ---- a member who doesn't run it: no Edit anywhere, their own task still ticks (the server's rule, 2026-11-27) ----
+  const code = (await api('GET', '/state')).workspace.inviteCode;
+  const sam = await (await fetch(APP + 'api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'join', workspace: 'Read ' + t, code, name: 'Sam', email: `s${t}@t.test`, password: 'pw-654321' }) })).json();
+  const samId = (await (await fetch(APP + 'api/state', { headers: { authorization: 'Bearer ' + sam.token } })).json()).me.memberId;
+  const samTask = await api('POST', '/tasks', { goalId: ph2.id, text: 'Sam’s call', assigneeId: samId });
+  await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(sam.token)})); localStorage.removeItem('column.campOpen'); location.reload(); true`).catch(() => {});
+  await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
+  await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
+  await A.until(`[...document.querySelectorAll('.camp-card')].some((x) => x.textContent.includes('Spring Promo'))`);
+  await A.ev(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes('Spring Promo')).click(); true`);
+  ok(await A.until(`!!${T('.cc-read')}`), 'Sam reads the campaign');
+  ok(!(await A.ev(`!!${T('.cc-edit')}`)), 'with no Edit: he doesn’t run it');
+  ok(await A.ev(`${row(mine.id)}.querySelector('.check').disabled`), 'Joshua’s task isn’t his to tick');
+  await A.ev(`${row(theirs.id)}.querySelector('.cc-rrow-name').click(); true`);
+  ok(await A.until(`!!document.querySelector('#sheet:not(.hidden) .task-read')`) && !(await A.ev(`!!document.querySelector('#sheet .tr-edit')`)), 'a task opens to read, with no Edit task');
+  await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
+  await A.ev(`${row(samTask.id)}.querySelector('.check').click(); true`);
+  let samDone = false;
+  for (let i = 0; i < 30 && !samDone; i++) { await sleep(150); samDone = (await api('GET', '/state')).tasks.find((x) => x.id === samTask.id)?.done; }
+  ok(samDone, 'and he ticks his own task');
   ok(!A.errors.length, 'no page errors: ' + A.errors.join(' | '));
 } catch (e) {
   ok(false, 'threw: ' + e.message);

@@ -3237,6 +3237,37 @@ function castList(v, ws) {
 // Who signs a step off: a person, or whoever plays a role in its campaign. The campaign's owner and admins can too.
 const signers = (t) => (t.signoff?.memberId ? [t.signoff.memberId] : t.signoff?.castId ? castRole(taskCamp(t), t.signoff.castId)?.memberIds || [] : []);
 const maySignOff = (t, auth) => isAdmin(auth) || taskCamp(t)?.ownerId === auth.memberId || signers(t).includes(auth.memberId);
+// Who changes a campaign's plan (the owner, 2026-11-27: "lock editing to runners and admins"): whoever runs it (its
+// maker, or whoever it's handed to) and admins. Everyone else who sees it works it: ticks their own tasks and their
+// checklists and work orders, marks them in progress, logs calls, comments. A Job Flow run keeps its own rules.
+// tests/campaign_lock.mjs
+const PLAN_ONLY = 'Only whoever runs this campaign, or an admin, can change its plan.';
+const plansCampaign = (c, auth) => !c || isJobRun(c) || isAdmin(auth) || (!!auth?.memberId && (c.ownerId === auth.memberId || c.assigneeId === auth.memberId));
+const campOfGoal = (goalId) => db.campaigns[db.goals[goalId]?.campaignId];
+// What someone who doesn't run the campaign may change on one of its tasks: finishing it (theirs, one nobody is on
+// yet, or theirs to sign off), In progress, ticks on its checklist (not its items), and a work order's materials used
+// and signature. A task given to someone else is theirs to tick. Says why not, or null.
+function workOnlyEdit(ws, t, body, auth) {
+  const keys = Object.keys(body || {}).filter((k) => body[k] !== undefined);
+  if (keys.some((k) => !['done', 'status', 'checklist', 'wo', 'sendBack'].includes(k))) return PLAN_ONLY;
+  const doer = (!t.assigneeId && !t.roleId && !t.castId) || taskDoers(ws, t).includes(auth.memberId);
+  if ((body.done !== undefined || body.status !== undefined) && !doer && !maySignOff(t, auth)) return 'Only whoever it’s for ticks it off.';
+  if (body.checklist !== undefined) {
+    const was = t.checklist || [], now = Array.isArray(body.checklist) ? body.checklist : [];
+    if (!doer) return 'Only whoever it’s for ticks its checklist.';
+    if (now.length !== was.length || now.some((x, i) => x?.id !== was[i].id || String(x?.text ?? '') !== was[i].text)) return PLAN_ONLY;
+  }
+  if (body.wo !== undefined) {
+    if (!doer) return 'Only whoever it’s for works its work order.';
+    const w = body.wo && typeof body.wo === 'object' ? body.wo : {};
+    if (Object.keys(w).some((k) => !['materials', 'signed'].includes(k))) return PLAN_ONLY;
+    if (w.materials !== undefined) {
+      const was = t.wo?.materials || [], now = Array.isArray(w.materials) ? w.materials : [];
+      if (now.length !== was.length || now.some((x, i) => x?.id !== was[i].id || (x?.itemId || null) !== (was[i].itemId || null) || String(x?.name ?? '') !== was[i].name)) return PLAN_ONLY;
+    }
+  }
+  return null;
+}
 
 function applyCampaign(c, body, ws, auth) {
   if (body.name !== undefined) c.name = String(body.name || '').trim().slice(0, 80);
@@ -9302,6 +9333,7 @@ async function api(req, res, url) {
       if (body.recordId && !rec) return send(res, 404, { error: 'That job is gone.' });
       const g = body.goalId && db.goals[body.goalId];
       if (body.goalId && (!g || g.wsId !== ws.id || !seesCampaign(g.campaignId, auth.memberId))) return send(res, 404, { error: 'That step is gone.' });
+      if (g && !plansCampaign(db.campaigns[g.campaignId], auth)) return send(res, 403, { error: PLAN_ONLY });
       const made = usePreset(ws, auth, x, { date: body.date ?? null, assigneeId: body.assigneeId || null, recordId: rec?.id || null, goalId: g?.id || null });
       save();
       return send(res, 200, x.kind === 'block' ? { tasks: [], entries: made.map(publicEntry) } : { tasks: made.map(publicTask) });
@@ -9328,6 +9360,7 @@ async function api(req, res, url) {
     if (m === 'POST' && !b) {
       const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, await readJson(req, 50_000));
       if (!canSee(auth, 'task', t)) return send(res, 404, { error: 'Goal not found' });
+      if (t.goalId && !plansCampaign(campOfGoal(t.goalId), auth)) return send(res, 403, { error: PLAN_ONLY });
       if (t.assigneeId || t.roleId || t.castId) t.assignedBy = auth.memberId;
       noteWork(t, null);
       db.tasks[t.id] = t;
@@ -9370,6 +9403,8 @@ async function api(req, res, url) {
     if (m === 'PATCH') {
       const body = await readJson(req, 50_000);
       const camp = db.campaigns[db.goals[t.goalId]?.campaignId];
+      if (camp && !plansCampaign(camp, auth)) { const why = workOnlyEdit(ws, t, body, auth); if (why) return send(res, 403, { error: why }); }
+      if (body.goalId && body.goalId !== t.goalId && !plansCampaign(campOfGoal(body.goalId), auth)) return send(res, 403, { error: PLAN_ONLY });
       if ((body.skipped !== undefined || body.unlocked !== undefined) && !passesSteps(camp, auth)) return send(res, 403, { error: 'Only an owner can skip or unlock a step.' });
       const openSubs = body.done && !t.done ? Object.values(db.tasks).filter((x) => x.parentId === t.id && !x.done && !x.skipped) : [];
       if (openSubs.length) return send(res, 409, { error: `Finish its subtasks first: ${openSubs.slice(0, 3).map((x) => `“${clipText(x.text, 50)}”`).join(', ')}${openSubs.length > 3 ? ` and ${openSubs.length - 3} more` : ''}.` });
@@ -9425,6 +9460,7 @@ async function api(req, res, url) {
       return send(res, 200, publicTask(next));
     }
     if (m === 'DELETE') {
+      if (!plansCampaign(campOfGoal(t.goalId), auth)) return send(res, 403, { error: PLAN_ONLY });
       // Its subtasks stay, as tasks of their own.
       for (const x of Object.values(db.tasks)) if (x.parentId === t.id) { delete x.parentId; broadcast(ws.id, { type: 'task', task: publicTask(x) }); }
       deleteTask(t);
@@ -9493,6 +9529,7 @@ async function api(req, res, url) {
       return send(res, 200, publicCampaign(c));
     }
     if (m === 'PATCH') {
+      if (!plansCampaign(c, auth)) return send(res, 403, { error: PLAN_ONLY });
       const body = await readJson(req, 100_000);
       const was = JSON.stringify([c.private, c.memberIds, c.assigneeId, castOf(c).map((r) => r.memberIds)]);
       const next = applyCampaign({ ...c, memberIds: [...c.memberIds] }, body, ws, auth);
@@ -11043,6 +11080,7 @@ async function api(req, res, url) {
       const body = await readJson(req, 50_000);
       const c = db.campaigns[body.campaignId];
       if (!c || c.wsId !== ws.id || !canSee(auth, 'campaign', c)) return send(res, 404, { error: 'Campaign not found' });
+      if (!plansCampaign(c, auth)) return send(res, 403, { error: PLAN_ONLY });
       const order = Math.max(0, ...Object.values(db.goals).filter((g) => g.campaignId === c.id).map((g) => g.order || 0)) + 1;
       const g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: auth.member, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order }, body, c);
       db.goals[g.id] = g;
@@ -11052,6 +11090,7 @@ async function api(req, res, url) {
     }
     const g = b && db.goals[b];
     if (!g || g.wsId !== ws.id || !canSee(auth, 'goal', g)) return send(res, 404, { error: 'Not found' });
+    if ((m === 'PATCH' || m === 'DELETE') && !plansCampaign(db.campaigns[g.campaignId], auth)) return send(res, 403, { error: PLAN_ONLY });
     if (m === 'PATCH') {
       const body = await readJson(req, 50_000);
       const camp = db.campaigns[g.campaignId];
