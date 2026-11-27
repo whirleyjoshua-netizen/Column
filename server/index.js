@@ -6352,6 +6352,8 @@ function jobChatEnsure(ws, rec) {
   // doesn't name it back, is left as it is; a feed made just now goes again, so no half-made chat is left.
   if (!st || ch.stackId !== st.id || st.channelId !== ch.id) {
     if (made) ws.channels = ws.channels.filter((c) => c !== ch);
+    // The record doesn't present it as the job's chat either; the feed and the stack stay as they are.
+    if (rec.chatId === ch.id) { delete rec.chatId; save(); }
     if (!rec.chatBroken) console.error(`A job's chat couldn't be linked to its files (job ${rec.id}): left as it is.`);
     rec.chatBroken = true; // the safety net doesn't try it again every minute
     return null;

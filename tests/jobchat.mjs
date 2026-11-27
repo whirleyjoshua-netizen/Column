@@ -384,6 +384,8 @@ try {
   w.stacks.push({ id: 'confstk1', name: 'Conflicted', channelId: 'oldphoto' });
   const cs = w.stacks.find((x) => x.id === confSt?.id);
   if (cs) cs.channelId = 'oldphoto';
+  const ss2 = w.stacks.find((x) => x.recordId === jSame.id); // an existing job chat's stack, now naming another feed
+  if (ss2) ss2.channelId = 'oldphoto';
   w.channels.push({ id: 'conffeed', name: 'conf-feed', folderId: null, stackId: 'nosuchst' });
   const other = Object.values(db.workspaces).find((x) => x.id !== w.id && x.stacks?.some((y) => y.name === 'OTHERTEAMSTACK'));
   const camp2ch = w.channels.find((c) => c.campaignId === camp2?.id);
@@ -410,7 +412,15 @@ try {
   st = await ws();
   ok(r.status === 409 && !st.workspace.channels.some((c) => c.recordId === jConf.id), 'a job whose stack is bound to another feed: its chat isn’t made (409), nothing half-made');
   r = await rico('GET', '/state');
-  ok(!(r.body.workspace.stacks.find((x) => x.id === confSt?.id)?.channelId && r.body.workspace.stacks.find((x) => x.id === confSt?.id)?.channelId !== 'oldphoto'), 'and its stack still names the feed it named');
+  ok(r.body.workspace.stacks.find((x) => x.id === confSt?.id)?.channelId === 'oldphoto', 'and its stack still names the feed it named');
+  // An existing job chat whose stack now names another feed: not presented as the job's chat; both left as they are.
+  r = await rico('POST', `/jobs/${jSame.id}/chat`);
+  st = await ws();
+  const sameRec = ((await rico('GET', `/projects/${p.id}/records`)).body || []).find((x) => x.id === jSame.id);
+  const sameSt = st.workspace.stacks.find((x) => x.recordId === jSame.id);
+  ok(r.status === 409 && sameRec && !sameRec.chatId, 'an existing job chat with a broken link: 409, and the job no longer names it as its chat: ' + r.status + ' ' + sameRec?.chatId);
+  ok(sameSt?.channelId === 'oldphoto' && st.workspace.channels.some((c) => c.recordId === jSame.id), 'the feed and the stack are left as they were');
+  ok(((await rico('GET', '/jobs')).body?.jobs || []).find((j) => j.id === jSame.id)?.chatId === null, 'and the Jobs list gives it no chatId');
   ok(st.workspace.channels.filter((c) => c.recordId === jBoard.id).length === 1, 'and no second feed for a job: ' + st.workspace.channels.filter((c) => c.recordId === jBoard.id).length);
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e));

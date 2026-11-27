@@ -244,3 +244,4 @@ someone on the job, nothing for a member who isn't). §8.9 corrected: the app's 
   is, a feed made just then is taken back, `POST /jobs/:id/chat` answers 409, and the safety net doesn't retry it
   (`rec.chatBroken`, kept out of the record sent to the app). A message reaches nobody with Chat off for members live
   either (the broadcast checks `chatOffFor` for any message, as state does), #general included. Tests for both.
+- Round 2: an existing job chat whose link breaks is no longer named by the job (`rec.chatId` cleared; the feed and stack left as they are), with a test; the conflict test asserts the exact feed id.
