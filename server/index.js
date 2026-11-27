@@ -2776,9 +2776,11 @@ function archivedTest(ws) {
 }
 const publicChannels = (ws, memberId) => ws.channels.filter((x) => !x.archived && seesFeed(x, memberId, ws)).map((ch) => (ch.pins ? { ...ch, pins: publicChatPins(ws, ch.pins, memberId) } : ch));
 
+// A folder a feed can be put in by hand. The Jobs folder holds job chats only, and job chats stay in it.
 function validChatFolder(ws, folderId) {
-  return folderId && ws.chatFolders.some((f) => f.id === folderId) ? folderId : null;
+  return folderId && ws.chatFolders.some((f) => f.id === folderId && !f.jobs) ? folderId : null;
 }
+const isJobsFolder = (ws, folderId) => !!folderId && ws.chatFolders.some((f) => f.id === folderId && f.jobs);
 const channelSlug = (raw) => String(raw || '').trim().toLowerCase().replace(/^#+/, '').replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').replace(/-{2,}/g, '-').slice(0, 40);
 function channelName(ws, raw, selfId) {
   const n = channelSlug(raw);
@@ -8689,7 +8691,7 @@ async function api(req, res, url) {
         settings: { expireHours: 0, tools: Object.fromEntries(TOOL_KEYS.map((k) => [k, NEW_TEAM_TOOLS.includes(k)])) },
         stacks: [],
         channels: [],
-        chatFolders: [],
+        chatFolders: [{ id: rid(8), name: 'Jobs', jobs: true }],
         dirs: [],
         roles: [],
         members: [],
@@ -11925,6 +11927,7 @@ async function api(req, res, url) {
     let resync = false;
     if (m === 'POST' && !b) {
       const { name, folderId, memberIds } = await readJson(req);
+      if (isJobsFolder(ws, folderId)) return send(res, 400, { error: 'The Jobs folder holds a chat for each job. Make a job and its chat goes there.' });
       const ch = { id: rid(8), name: channelName(ws, name), folderId: validChatFolder(ws, folderId), ownerId: auth.memberId };
       ch.memberIds = feedMembers(ws, ch, memberIds);
       ws.channels.push(ch);
@@ -11951,12 +11954,14 @@ async function api(req, res, url) {
         const body = await readJson(req);
         if (body.memberIds !== undefined && ch.recordId) return send(res, 400, { error: 'This chat follows its job: whoever sees the job is in it.' });
         if (body.name !== undefined && ch.recordId) return send(res, 400, { error: 'This chat is named after its job. Rename the job instead.' });
+        if (body.folderId !== undefined && ch.recordId && !isJobsFolder(ws, body.folderId)) return send(res, 400, { error: 'A job’s chat stays in the Jobs folder.' });
+        if (body.folderId !== undefined && !ch.recordId && isJobsFolder(ws, body.folderId)) return send(res, 400, { error: 'The Jobs folder holds a chat for each job only.' });
         if (body.name !== undefined) {
           ch.name = channelName(ws, body.name, ch.id);
           const st = ch.stackId && !ch.campaignId && ws.stacks.find((x) => x.id === ch.stackId && x.channelId === ch.id);
           if (st) st.name = ch.name.slice(0, 40); // its Files follow its name
         }
-        if (body.folderId !== undefined) ch.folderId = validChatFolder(ws, body.folderId);
+        if (body.folderId !== undefined && !ch.recordId) ch.folderId = validChatFolder(ws, body.folderId);
         if (body.memberIds !== undefined) {
           if (ch.campaignId) return send(res, 400, { error: 'This feed follows its campaign. Change who sees the campaign instead.' });
           if (!managesFeed(ch, auth)) return send(res, 403, { error: 'Only the person who made this feed can change who’s in it.' });
@@ -11990,7 +11995,10 @@ async function api(req, res, url) {
       const { name } = await readJson(req);
       const n = String(name || '').trim().slice(0, 40);
       if (!n) return send(res, 400, { error: 'Name required' });
+      if (n.toLowerCase() === 'jobs') return send(res, 409, { error: 'There’s already a Jobs folder: each job’s chat goes there.' });
       ws.chatFolders.push({ id: rid(8), name: n });
+    } else if (ws.chatFolders.some((x) => x.id === b && x.jobs) && (m === 'PATCH' || m === 'DELETE')) {
+      return send(res, 400, { error: 'The Jobs folder is always there, with a chat for each job. It can’t be renamed or deleted.' });
     } else if (m === 'PATCH' && b) {
       const { name } = await readJson(req);
       const f = ws.chatFolders.find((x) => x.id === b);
@@ -14021,7 +14029,7 @@ migratePeople();
 migrateDay();
 PJ.moveLicensesOut();
 // Chat and stacks together (docs/jobflows/JOBCHAT.md §7): each team once; the job-chat safety net starts from now.
-{ let changed = false; for (const ws of Object.values(db.workspaces)) { if (chatStacksMigrate(ws)) changed = true; if (ws.jobChatsSince === undefined) { ws.jobChatsSince = Date.now(); changed = true; } } if (changed) save(); }
+{ let changed = false; for (const ws of Object.values(db.workspaces)) { if (chatStacksMigrate(ws)) changed = true; if (!ws.chatFolders.some((f) => f.jobs)) { chatFolderFor(ws, 'jobs', 'Jobs'); changed = true; } /* the Jobs chat folder is always there (JOBCHAT.md §13) */ if (ws.jobChatsSince === undefined) { ws.jobChatsSince = Date.now(); changed = true; } } if (changed) save(); }
 PJ.reseeAll(); // who sees each job now, so the first change after a restart tells only those it changes for
 dropCutImports();
 flowsStart();

@@ -75,6 +75,35 @@ try {
   const feedOf = (s2, recId) => (s2.workspace.channels || []).find((c) => c.recordId === recId);
   const jobsFolder = (s2) => (s2.workspace.chatFolders || []).find((f) => f.jobs);
 
+  // ---- the Jobs folder: always there, can't be renamed or deleted ----
+  let jf0 = jobsFolder(st);
+  ok(jf0 && jf0.name === 'Jobs', 'a new team has the Jobs chat folder before it has any job');
+  ok((await rico('PATCH', '/chat-folders/' + jf0?.id, { name: 'Work' })).status === 400, 'renaming the Jobs folder: 400');
+  ok((await rico('DELETE', '/chat-folders/' + jf0?.id)).status === 400, 'deleting the Jobs folder: 400');
+  st = await ws();
+  ok(jobsFolder(st)?.id === jf0?.id && jobsFolder(st)?.name === 'Jobs' && st.workspace.chatFolders.filter((f) => f.jobs).length === 1, 'it’s still there, still called Jobs, and only one');
+  ok((await rico('POST', '/chat-folders', { name: 'Jobs' })).status === 409, 'a second folder called Jobs: 409');
+  ok((await ws(sam)).workspace.chatFolders.some((f) => f.jobs), 'members see it too');
+  // A new job shows up in it straight away, for everyone who sees the job.
+  const heardSam = listen(samTok);
+  await heardSam.ready;
+  const jBurns = await add(rico, { job: 'Burns hOme' });
+  ok(await until(() => heardSam.heard.some((x) => x.type === 'workspace' || x.type === 'resync')), 'a member’s app is told when a job’s chat is made');
+  let sb = await ws(sam);
+  const burns = feedOf(sb, jBurns.id);
+  ok(burns && burns.folderId === jobsFolder(sb)?.id && burns.name === 'burns-home', 'a job called “Burns hOme” gets its chat, burns-home, in Jobs: ' + burns?.name);
+  ok((await rico('PATCH', '/channels/' + burns?.id, { folderId: null })).status === 400, 'a job’s chat can’t be moved out of Jobs: 400');
+  const jfOther = (await rico('POST', '/chat-folders', { name: 'Elsewhere' })).body?.chatFolders?.find((f) => f.name === 'Elsewhere');
+  ok((await rico('PATCH', '/channels/' + burns?.id, { folderId: jfOther?.id })).status === 400, 'or into another folder: 400');
+  ok(feedOf(await ws(), jBurns.id)?.folderId === jf0?.id, 'it stays in Jobs');
+  const jfPlain = (await rico('POST', '/channels', { name: 'yard-talk' })).body;
+  const plainId = jfPlain?.channels?.find((c) => c.name === 'yard-talk')?.id || jfPlain?.id;
+  ok((await rico('PATCH', '/channels/' + plainId, { folderId: jf0?.id })).status === 400, 'an ordinary feed can’t be put in Jobs: 400');
+  // Switched off for the team: the folder stays (the job chats already made live there).
+  await rico('PATCH', '/workspace', { jobChats: false });
+  ok(jobsFolder(await ws())?.id === jf0?.id, 'Make a chat for each new job off: the Jobs folder stays');
+  await rico('PATCH', '/workspace', { jobChats: true });
+
   // ---- made with the job, by every path ----
   ok(st.workspace.jobChats === true, 'the team switch, Make a chat for each new job, is on by default: ' + st.workspace.jobChats);
   const jBoard = await add(rico, { job: 'Smith kitchen' });
@@ -376,6 +405,8 @@ try {
   const db = JSON.parse(fs.readFileSync(DIR + '/db.json', 'utf8'));
   const w = Object.values(db.workspaces).find((x) => x.name === 'Chat ' + t);
   w.stacks.push({ id: 'oldstk01', name: 'Old photos' });
+  const ow = Object.values(db.workspaces).find((x) => x.name === 'Other ' + t);
+  ow.chatFolders = (ow.chatFolders || []).filter((f) => !f.jobs);
   w.channels.push({ id: 'oldphoto', name: 'old-photos', folderId: null }); // a feed already called that
   for (const c of w.channels) if (c.campaignId) delete c.stackId;
   for (const x of w.stacks) if (x.campaignId) delete x.channelId;
@@ -429,6 +460,8 @@ try {
   st = await ws();
   ok(!st.workspace.channels.some((c) => c.recordId === jConf.id) && st.workspace.stacks.find((x) => x.recordId === jSame.id)?.channelId === 'oldphoto', 'after the restart nothing was retried or changed');
   ok(st.workspace.channels.filter((c) => c.recordId === jBoard.id).length === 1, 'and no second feed for a job: ' + st.workspace.channels.filter((c) => c.recordId === jBoard.id).length);
+  ok(st.workspace.chatFolders.filter((f) => f.jobs).length === 1, 'restarts keep one Jobs folder');
+  ok((await call(o.token)('GET', '/state')).body?.workspace?.chatFolders?.filter((f) => f.jobs).length === 1, 'a team from before (its Jobs folder gone) gets it back at startup');
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e));
   fails++;

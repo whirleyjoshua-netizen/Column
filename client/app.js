@@ -11950,6 +11950,8 @@
       : manages ? [{ label: 'People…', run: () => feedPeopleSheet(ch) }]
       : [{ note: 'In this feed: ' + [ch.ownerId, ...ch.memberIds].map(memberName).join(', ') },
          { label: 'Leave feed', danger: true, run: () => wsCall('POST', '/channels/' + ch.id + '/leave') }];
+    // A job's chat follows its job: its name, who's in it, its folder (Jobs) and when it's archived.
+    if (ch.recordId) return openMenu(anchor, [pinRow('chan:' + ch.id, ch.name), { note: 'This chat follows its job: rename the job to rename it. Whoever sees the job is in it.' }]);
     openMenu(anchor, [
       pinRow('chan:' + ch.id, ch.name),
       ...people,
@@ -11959,12 +11961,13 @@
       } },
       { head: 'Move to folder' },
       { label: 'No folder', on: !ch.folderId, run: () => wsCall('PATCH', '/channels/' + ch.id, { folderId: null }) },
-      ...S.workspace.chatFolders.map((f) => ({ label: f.name, on: ch.folderId === f.id, run: () => wsCall('PATCH', '/channels/' + ch.id, { folderId: f.id }) })),
+      ...S.workspace.chatFolders.filter((f) => !f.jobs).map((f) => ({ label: f.name, on: ch.folderId === f.id, run: () => wsCall('PATCH', '/channels/' + ch.id, { folderId: f.id }) })),
       ...(ch.campaignId || (ch.ownerId && !manages) ? [] : [{ head: '' }, { label: 'Delete feed and its messages', danger: true, run: () => wsCall('DELETE', '/channels/' + ch.id) }]),
     ]);
   }
 
   function feedFolderMenu(f, anchor, head) {
+    if (f.jobs) return openMenu(anchor, [{ note: 'Each job gets its own chat here when it’s made. This folder is always here.' }]);
     openMenu(anchor, [
       { label: 'New feed in folder', run: () => {
         C.collapsed[f.id] = false;
@@ -11990,7 +11993,8 @@
     if (!C.side) return;
     if (C.side.querySelector('.rename')) return; // don't yank an input out from under the user
     const channels = S.workspace.channels || [];
-    const folders = S.workspace.chatFolders || [];
+    // The Jobs folder is always there, first.
+    const folders = [...(S.workspace.chatFolders || [])].sort((x, y) => (y.jobs ? 1 : 0) - (x.jobs ? 1 : 0));
     const head = h('div', { class: 'ch-side-head' }, h('span', {}, 'Feeds'));
     head.append(h('button', { class: 'ch-more', 'aria-label': 'New feed or folder', title: 'New feed or folder', html: I.plus, onclick: (e) => openMenu(e.currentTarget, [
       { label: '# New feed', run: () => newChannel(head) },
@@ -12021,7 +12025,7 @@
         r.classList.add('in');
         out.push(r);
       }
-      if (!inside.length && !shut) out.push(h('div', { class: 'ch-empty in' }, 'No feeds yet'));
+      if (!inside.length && !shut) out.push(h('div', { class: 'ch-empty in' }, f.jobs ? 'Each new job’s chat shows up here' : 'No feeds yet'));
     }
     C.side.replaceChildren(...out);
   }
