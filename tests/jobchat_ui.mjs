@@ -64,6 +64,17 @@ try {
   await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000);
   await A.tap(`document.querySelector('#tabs [data-tab=chat]')`);
   await A.until(`!!${CHAT}?.querySelector('.ch-row')`, 10000);
+  // The Jobs folder: first, there before any job, no rename or delete; a new job's chat shows up in it by itself.
+  const firstFolder = `${CHAT}.querySelector('.ch-folder')`;
+  ok(await A.until(`/^Jobs/.test(${firstFolder}?.textContent || '') && ${CHAT}.textContent.includes('Each new job’s chat shows up here')`, 8000), 'the Jobs folder is first in the chat list, there before any job');
+  await A.ev(`${firstFolder}.querySelector('.ch-more').click(); true`);
+  ok(await A.until(`!document.querySelector('#menu').classList.contains('hidden') && /always here/.test(document.querySelector('#menu').textContent) && !/Rename|Delete/.test(document.querySelector('#menu').textContent)`), 'its menu has no Rename or Delete');
+  await A.ev(`document.body.click(); true`);
+  const burns = await rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Burns hOme' } });
+  ok(await A.until(`(() => { const rows = [...${CHAT}.querySelectorAll('.ch-folder, .ch-row')]; const i = rows.findIndex((r) => r.classList.contains('ch-folder') && /^Jobs/.test(r.textContent)); return i >= 0 && rows[i + 1]?.classList.contains('in') && /burns-home/.test(rows[i + 1].textContent); })()`, 10000), 'a new job called “Burns hOme”: its chat, burns-home, shows up under Jobs without a reload');
+  await A.ev(`[...${CHAT}.querySelectorAll('.ch-row')].find((r) => /burns-home/.test(r.textContent)).querySelector('.ch-more')?.click(); true`);
+  ok(await A.until(`/follows its job/.test(document.querySelector('#menu').textContent) && !/Move to folder|Delete feed|Rename/.test(document.querySelector('#menu').textContent)`), 'a job chat’s menu: no rename, move or delete');
+  await A.ev(`document.body.click(); true`);
   await A.ev(`[...${CHAT}.querySelectorAll('.ch-row')].find((r) => /yard/.test(r.textContent)).click(); true`);
   ok(await A.until(`!!${CHAT}?.querySelector('.ch-tabs [data-ft=all]') && !!${CHAT}.querySelector('.ch-tabs [data-ft=chat]') && !!${CHAT}.querySelector('.ch-tabs [data-ft=files]')`), 'a feed has All / Chat / Files tabs');
   await A.tap(`${CHAT}.querySelector('.ch-tabs [data-ft=chat]')`);

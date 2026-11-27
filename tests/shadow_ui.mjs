@@ -53,8 +53,8 @@ try {
 
   // A chat folder's options are the folder's.
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`); await A.tap(`document.querySelector('#menu [data-tool=chat]')`);
-  ok(await A.until(`!!document.querySelector('.ch-more[aria-label="Folder options"]')`, 10000), 'the Crews folder is in Chat with its options button');
-  await A.tap(`document.querySelector('.ch-more[aria-label="Folder options"]')`);
+  ok(await A.until(`!![...document.querySelectorAll('.ch-folder')].find((f) => /Crews/.test(f.textContent))?.querySelector('.ch-more[aria-label="Folder options"]')`, 10000), 'the Crews folder is in Chat with its options button');
+  await A.tap(`[...document.querySelectorAll('.ch-folder')].find((f) => /Crews/.test(f.textContent))?.querySelector('.ch-more[aria-label="Folder options"]')`);
   const menu = await A.ev(`[...document.querySelectorAll('#menu button, #menu .mh')].map((b) => b.textContent).join(' | ')`);
   ok(/New feed in folder/.test(menu) && /Rename folder/.test(menu) && !/Save to folder/.test(menu), `Folder options are the folder’s own (${menu})`);
   await A.key('Escape', 27);
