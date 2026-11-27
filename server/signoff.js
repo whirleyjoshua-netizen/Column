@@ -22,7 +22,7 @@ export function signoffModule(d) {
   function locate(ws, auth, recordId, fieldId) {
     const rec = db.records[recordId];
     const p = rec && db.projects[rec.projectId];
-    if (!rec || rec.wsId !== ws.id || !PJ.sees(p, auth.memberId)) return null;
+    if (!rec || rec.wsId !== ws.id || !PJ.sees(p, auth.memberId) || !PJ.seesJob(rec, auth.memberId, p)) return null;
     const t = p.types.find((x) => x.id === rec.typeId);
     const f = t?.fields.find((x) => x.id === fieldId && x.type === 'signature');
     return f ? { rec, p, t, f } : null;

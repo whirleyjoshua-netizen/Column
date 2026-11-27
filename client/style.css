@@ -5177,6 +5177,34 @@ body:not(.wide) .cc-phases { padding: 12px 10px; }
 .jb-gearline { display: block; margin: 2px 0 6px; color: var(--muted); }
 .jb-camp { display: block; }
 
+/* Jobs → Overview, Clients, Schedule (docs/jobflows/PHASE5.md) */
+.jb-h { margin: 0; flex: 1; font-size: 16px; }
+.jb-pipe { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 16px; }
+.jb-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--card); cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.jb-tile:hover { border-color: var(--accent); }
+.jb-tile-n { font-size: 26px; font-weight: 700; line-height: 1; }
+.jb-tile-l { color: var(--muted); font-size: 13px; }
+.jb-pipe-chip { white-space: nowrap; }
+.jb-move { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
+.jb-move h4 { margin: 0; }
+.jb-move-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 8px; }
+.jb-move-row > div:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 200px; }
+.jb-move-row small { color: var(--muted); }
+.jb-when { min-width: 120px; text-align: center; }
+.jw { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: auto; margin: 6px 0 12px; }
+.jw-row { display: grid; grid-template-columns: 140px repeat(7, minmax(96px, 1fr)); border-top: 1px solid var(--line); }
+.jw-row.jw-head { border-top: 0; background: var(--panel); font-size: 12px; color: var(--muted); }
+.jw-name { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 13px; overflow: hidden; }
+.jw-day { padding: 6px 8px; }
+.jw-day.today { color: var(--accent); font-weight: 600; }
+.jw-cell { border-left: 1px solid var(--line); padding: 4px; display: flex; flex-direction: column; gap: 4px; min-height: 44px; }
+.jw-cell.over { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.jw-visit { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 0; border-radius: 6px; padding: 4px 6px; background: color-mix(in srgb, var(--accent) 14%, var(--card)); font: inherit; font-size: 12px; color: inherit; cursor: pointer; text-align: left; }
+.jw-visit.done { opacity: 0.55; }
+.jw-visit small { color: var(--muted); }
+.jw-visit span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.tm-jobs-link { margin: 4px 0 8px; }
+
 /* Settings → Website (websites.js): your site, a request moving along, packages to pick, and Kloomie staff's list. */
 .web-sec h4, .web-ask h4 { margin: 16px 0 6px; font-size: 13px; }
 .web-own a { font-weight: 600; }

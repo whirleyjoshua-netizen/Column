@@ -42,8 +42,10 @@ const btnText = (scope, text) => `[...document.querySelectorAll(${JSON.stringify
 // SHOTS=<folder>: screenshots at the main points, to look at.
 const shot = async (name) => { if (!process.env.SHOTS) return; await sleep(500); const r = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(`${process.env.SHOTS}/${name}.png`, Buffer.from(r.result.data, 'base64')); };
 const TOOL = (sel) => `document.querySelector('#tool ${sel}')`;
+// A Jobs sub-tab, clicked once it's there (the tool redraws as its lists arrive, so the click and the look are one step).
+const jbTab = async (k) => { await A.until(`(() => { const e = document.querySelector('#tool [data-jb=${k}]'); if (!e) return false; e.click(); return true; })()`, 10000); await sleep(250); };
 // Open a job from the Jobs list (Workspace → Jobs), as clicking its row does.
-const openJobIn = async (id) => { await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`); await A.until(`!!document.querySelector('#tool [data-jb=jobs]')`); await A.tap(TOOL('[data-jb=jobs]')); await A.until(`!!document.querySelector('#tool .jb-row[data-job="${id}"]')`, 8000); await A.tap(TOOL(`.jb-row[data-job="${id}"] .jb-main`)); await A.until(`!!document.querySelector('#projects .jb-card')`, 8000); };
+const openJobIn = async (id) => { await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`); await A.until(`!!document.querySelector('#tool [data-jb=jobs]')`); await jbTab('jobs'); await A.until(`!!document.querySelector('#tool .jb-row[data-job="${id}"]')`, 8000); await A.tap(TOOL(`.jb-row[data-job="${id}"] .jb-main`)); await A.until(`!!document.querySelector('#projects .jb-card')`, 8000); };
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(APP + 'api/health')).ok) break; } catch {} await sleep(150); }
   const t = Date.now();
@@ -82,6 +84,7 @@ try {
   ok(await A.until(`!!document.querySelector('#workTabs [data-tab=jobs]')`), 'Workspace has a Jobs tab');
   ok(await A.ev(`(() => { const ks = [...document.querySelectorAll('#workTabs [data-tab]')].map((b) => b.dataset.tab); return ks.indexOf('jobs') === ks.indexOf('projects') - 1; })()`), 'beside Boards');
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
+  await jbTab('jobs'); // Jobs opens on Overview (PHASE5.md §1)
   ok(await A.until(`!!${TOOL(`.jb-row[data-job="${made.job.id}"]`)}`), 'Jobs lists the job on the flow');
   ok(await A.ev(`${TOOL(`.jb-row[data-job="${made.job.id}"]`)}.textContent.includes('Bin cleaning · 0/4') && ${TOOL(`.jb-row[data-job="${made.job.id}"] .jb-next`)}.textContent.includes('Add client info')`), 'with its flow, how far along, and a button for the step it’s at');
   ok(await A.ev(`[...document.querySelectorAll('#tool .jb-row')].some((r) => r.textContent.includes('Old job by hand') && r.textContent.includes('Not on a flow'))`), 'and a job not on a flow too');
@@ -91,7 +94,7 @@ try {
   await A.type(TOOL('.jb-q'), '');
 
   // Job Flows: a new flow from a ready-made start, a step added and moved, published.
-  await A.tap(TOOL('[data-jb=flows]'));
+  await jbTab('flows');
   ok(await A.until(`!!${TOOL(`.jb-row[data-flow="${flow.id}"]`)} && ${TOOL(`.jb-row[data-flow="${flow.id}"]`)}.textContent.includes('Version 1')`), 'Job Flows lists the flow and its version');
   await A.tap(TOOL('[data-act=new-flow]'));
   await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
@@ -113,8 +116,8 @@ try {
 
   // Phase 2 (docs/jobflows/PHASE2.md §5): Items, the builder's billing, the Quote step, the automatic invoice, and
   // Quotes and Invoices in Jobs.
-  ok(await A.ev(`['jobs', 'quotes', 'invoices', 'items', 'flows'].join() === [...document.querySelectorAll('#tool [data-jb]')].map((b) => b.dataset.jb).join()`), 'an owner’s Jobs has Jobs, Quotes, Invoices, Items and Job Flows');
-  await A.tap(TOOL('[data-jb=items]'));
+  ok(await A.ev(`['overview', 'clients', 'schedule', 'jobs', 'quotes', 'invoices', 'items', 'flows'].join() === [...document.querySelectorAll('#tool [data-jb]')].map((b) => b.dataset.jb).join()`), 'an owner’s Jobs has Overview, Clients, Schedule, Jobs, Quotes, Invoices, Items and Job Flows (PHASE5.md)');
+  await jbTab('items');
   ok(await A.until(`!!${TOOL('[data-act=new-item]')}`), 'Items opens, with + New item');
   await A.tap(TOOL('[data-act=new-item]'));
   await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
@@ -124,7 +127,7 @@ try {
   await A.tap(btnText('#sheet', 'Add it'));
   ok(await A.until(`[...document.querySelectorAll('#tool .jb-row[data-item]')].some((r) => r.textContent.includes('Can clean') && r.textContent.includes('$25.00 / each'))`), 'a new item shows on Items with its price and unit');
   await shot('5-items');
-  await A.tap(TOOL('[data-jb=flows]'));
+  await jbTab('flows');
   await A.until(`!!${TOOL('[data-act=new-flow]')}`);
   await A.tap(TOOL('[data-act=new-flow]'));
   await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
@@ -154,7 +157,7 @@ try {
   ok(await A.until(`[...document.querySelectorAll('#tool .jb-row')].some((r) => r.textContent.includes('Quoted cleans') && r.textContent.includes('changes not published'))`, 8000), 'a draft that changes only the due days says it has changes not published');
   await api('PATCH', `/job-flows/${qf.id}`, { dueDays: 10 });
   // Items: archive and bring back.
-  await A.tap(TOOL('[data-jb=items]'));
+  await jbTab('items');
   await A.until(`!!${TOOL(`.jb-row[data-item="${canId}"] [data-act=archive]`)}`);
   await A.tap(TOOL(`.jb-row[data-item="${canId}"] [data-act=archive]`));
   ok(await A.until(`!!document.querySelector('#tool .jb-gone .jb-row[data-item="${canId}"] [data-act=restore]')`), 'archiving an item moves it under Archived');
@@ -163,7 +166,7 @@ try {
   ok(await A.until(`!!${TOOL(`.jb-row[data-item="${canId}"] [data-act=archive]`)} && !document.querySelector('#tool .jb-gone')`), 'and bringing it back puts it back');
   const qj = await api('POST', '/jobs', { flowId: qf.id, contactId: dana.id, values: { job: 'Quoted job' } });
   for (const st of qf.version.body.steps.slice(0, qf.version.body.steps.findIndex((x) => x.kind === 'quote'))) if (st.kind !== 'client') await api('POST', `/jobs/${qj.job.id}/steps/${st.id}/skip`, { reason: 'Test: straight to the quote' });
-  await A.tap(TOOL('[data-jb=jobs]'));
+  await jbTab('jobs');
   await A.until(`!!${TOOL(`.jb-row[data-job="${qj.job.id}"]`)}`, 8000);
   ok(await A.ev(`${TOOL(`.jb-row[data-job="${qj.job.id}"]`)}.textContent.includes('$50.00')`), 'the Jobs list shows an owner the job’s total from its default lines');
   await A.tap(TOOL(`.jb-row[data-job="${qj.job.id}"] .jb-main`));
@@ -185,14 +188,14 @@ try {
   ok(await A.until(`document.querySelector('#projects .jb-step[data-state=done][data-step="${afPub.version.body.steps[2].id}"]') && (document.querySelector('#projects .jb-auto')?.textContent || '').includes('Made and sent by itself (INV-')`, 8000), 'Clean done: the invoice is made and sent by itself, and the step says so: ' + JSON.stringify((await api('GET', `/jobs/${aj.job.id}/run`)).run?.steps?.map((x) => [x.name, x.state, x.waiting, x.invoice])) + ' | ' + await A.ev(`document.querySelector('#projects .jb-auto')?.textContent + ' / ' + [...document.querySelectorAll('#projects .jb-step')].map((x) => x.dataset.state).join()`));
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
   await A.until(`!!document.querySelector('#tool [data-jb=quotes]')`, 8000);
-  await A.tap(TOOL('[data-jb=quotes]'));
+  await jbTab('quotes');
   ok(await A.until(`!!document.querySelector('#tool .fin-q-f')`), 'Quotes in Jobs is the team’s quotes list');
-  await A.tap(TOOL('[data-jb=invoices]'));
+  await jbTab('invoices');
   ok(await A.until(`[...document.querySelectorAll('#tool .fin-inv')].some((r) => r.textContent.includes('INV-'))`, 8000), 'Invoices in Jobs lists the invoice the flow sent');
-  await A.tap(TOOL('[data-jb=jobs]'));
+  await jbTab('jobs');
 
   // Phase 3 (docs/jobflows/PHASE3.md): steps Kloomie does by itself.
-  await A.tap(TOOL('[data-jb=flows]'));
+  await jbTab('flows');
   await A.until(`!!${TOOL(`.jb-row[data-flow="${qf.id}"] .jb-main`)}`);
   await A.tap(TOOL(`.jb-row[data-flow="${qf.id}"] .jb-main`));
   await A.until(`!!${TOOL('[data-act=add-step]')}`);
@@ -314,10 +317,10 @@ try {
   await shot('8-auto');
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
   await A.until(`!!document.querySelector('#tool [data-jb=jobs]')`, 8000);
-  await A.tap(TOOL('[data-jb=jobs]'));
+  await jbTab('jobs');
 
   // New job from a flow; it opens on its Overview with its steps.
-  await A.tap(TOOL('[data-jb=jobs]'));
+  await jbTab('jobs');
   await A.until(`!!${TOOL('[data-act=new-job]')}`);
   await A.tap(TOOL('[data-act=new-job]'));
   await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
@@ -361,7 +364,7 @@ try {
   await api('POST', '/task-presets', { kind: 'bundle', name: 'Prep', steps: [{ presetId: (await api('POST', '/task-presets', { text: 'Load the truck' })).id }] });
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
   await A.until(`!!document.querySelector('#tool [data-jb=flows]')`);
-  await A.tap(TOOL('[data-jb=flows]'));
+  await jbTab('flows');
   await A.until(`!!${TOOL('[data-act=new-flow]')}`);
   await A.tap(TOOL('[data-act=new-flow]'));
   await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
@@ -429,8 +432,9 @@ try {
   await A.ev(`document.querySelector('[data-tab=work]').click(); true`);
   await A.until(`!!document.querySelector('#workTabs [data-tab=jobs]')`);
   await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
+  await jbTab('jobs');
   ok(await A.until(`!!${TOOL(`.jb-row[data-job="${crewJob.job.id}"]`)}`), 'a member sees Jobs');
-  ok(await A.ev(`!document.querySelector('#tool [data-jb]') && !document.querySelector('#tool [data-act=new-flow], #tool .jb-scard, #tool [data-flow]')`), 'but no Job Flows sub-tab and nothing of the builder');
+  ok(await A.ev(`!document.querySelector('#tool [data-jb=flows], #tool [data-jb=quotes], #tool [data-jb=invoices], #tool [data-jb=items]') && !document.querySelector('#tool [data-act=new-flow], #tool .jb-scard, #tool [data-flow]')`), 'but no Job Flows, Quotes, Invoices or Items sub-tab and nothing of the builder');
   await A.tap(TOOL('[data-act=new-job]'));
   await A.until(`!document.querySelector('#sheet').classList.contains('hidden')`);
   ok(await A.ev(`[...document.querySelectorAll('#sheet select[aria-label=Flow] option')].map((o) => o.value).join() === ${JSON.stringify(crew.id)}`), 'New job offers only the flow everyone may start (not the owners-and-admins ones)');

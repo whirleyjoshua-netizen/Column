@@ -351,7 +351,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
     if (f.type === 'person') return nameOf(ws, v);
     if (f.type === 'money') return '$' + (Number(v) / 100).toLocaleString('en-US');
     if (f.type === 'contact') { const c = db.contacts[v]; return c ? (noPeople ? [c.name] : [c.name, c.email, c.phone]).filter(Boolean).join(' · ') : null; }
-    if (f.type === 'link') return (v || []).map((id) => db.records[id]).filter((r) => r?.wsId === ws.id && PJ.sees(db.projects[r.projectId], memberId)).map((r) => String(r.values[db.projects[r.projectId]?.types.find((x) => x.id === r.typeId)?.primary] ?? '')).join(', ') || null;
+    if (f.type === 'link') return (v || []).map((id) => db.records[id]).filter((r) => r?.wsId === ws.id && PJ.seesRec(r, memberId)).map((r) => String(r.values[db.projects[r.projectId]?.types.find((x) => x.id === r.typeId)?.primary] ?? '')).join(', ') || null;
     if (f.type === 'checkbox') return v ? 'yes' : 'no';
     if (f.type === 'checklist') return (v.items || []).map((x) => (x.done ? '☑ ' : '☐ ') + x.text).join('; ') || null;
     if (f.type === 'location') return v.address ? words(v.address, 200) : null;
@@ -443,7 +443,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
           const p = db.projects[r.projectId];
           if (!p || !PJ.sees(p, cx.memberId) || (a.project && !same(p.name, a.project))) continue;
           const t = p.types.find((x) => x.id === r.typeId);
-          if (!t || (a.list && !same(t.name, a.list) && !same(t.singular, a.list))) continue;
+          if (!t || !PJ.seesJob(r, cx.memberId, p, t) || (a.list && !same(t.name, a.list) && !same(t.singular, a.list))) continue;
           if (a.status && !t.fields.some((f) => f.type === 'select' && same(f.choices?.find((c) => c.id === r.values[f.id])?.label, a.status))) continue;
           if (quiet && ((r.log || [])[0]?.at || r.createdAt) > quiet) continue;
           const line = recLine(cx.ws, cx.memberId, r, cutOff(cx, 'contacts'));
@@ -964,12 +964,12 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
         const s = await cx.state();
         const onJob = new Map(); // photo id → the record it's on
         for (const r of jobsOpen(cx) ? Object.values(db.records) : []) {
-          if (r.wsId !== cx.ws.id || !db.projects[r.projectId] || !PJ.sees(db.projects[r.projectId], cx.memberId)) continue;
+          if (r.wsId !== cx.ws.id || !db.projects[r.projectId] || !PJ.seesRec(r, cx.memberId)) continue;
           const t = typeOfRec(r);
           for (const f of t?.fields || []) if (f.type === 'files') for (const id of r.values[f.id] || []) onJob.set(id, r);
         }
         const dirName = (id) => { const names = []; for (let d = (cx.ws.dirs || []).find((x) => x.id === id), i = 0; d && i < 10; d = (cx.ws.dirs || []).find((x) => x.id === d.parentId), i++) names.unshift(d.name); return names.join(' / '); };
-        const jobRec = a.job && jobsOpen(cx) ? (PJ.recordAt(String(a.job), cx.ws.id, cx.memberId)?.rec || Object.values(db.records).find((r) => r.wsId === cx.ws.id && PJ.sees(db.projects[r.projectId], cx.memberId) && same(recTitle(r.id), a.job))) : null;
+        const jobRec = a.job && jobsOpen(cx) ? (PJ.recordAt(String(a.job), cx.ws.id, cx.memberId)?.rec || Object.values(db.records).find((r) => r.wsId === cx.ws.id && PJ.seesRec(r, cx.memberId) && same(recTitle(r.id), a.job))) : null;
         if (a.job && !jobRec) throw new Error(`No job or record called ${a.job}.`);
         const q = String(a.query || '').toLowerCase();
         const since = Number(a.days) > 0 ? Date.now() - Number(a.days) * 864e5 : 0;
@@ -1062,7 +1062,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
         const s = await cx.state();
         const out = { days };
         // Records the person can see, with whether they count as won and what they're worth.
-        const recs = !jobsOpen(cx) ? [] : Object.values(db.records).filter((r) => r.wsId === cx.ws.id && db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId));
+        const recs = !jobsOpen(cx) ? [] : Object.values(db.records).filter((r) => r.wsId === cx.ws.id && db.projects[r.projectId] && PJ.seesRec(r, cx.memberId));
         const won = (r) => { const t = typeOfRec(r); return !!t?.fields.some((f) => f.type === 'select' && WON.test(f.choices?.find((c) => c.id === r.values[f.id])?.label || '')); };
         const worth = (r) => { const t = typeOfRec(r); const f = t?.fields.find((x) => x.type === 'money' && r.values[x.id] != null); return f ? r.values[f.id] / 100 : 0; };
         const months = {};
@@ -1075,7 +1075,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
           for (const c of Object.values(db.contacts)) {
             if (c.wsId !== cx.ws.id || (c.createdAt || 0) < since) continue;
             const src = c.source || 'Not recorded';
-            const mine = (links.get(c.id) || []).filter((r) => jobsOpen(cx) && db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId));
+            const mine = (links.get(c.id) || []).filter((r) => jobsOpen(cx) && db.projects[r.projectId] && PJ.seesRec(r, cx.memberId));
             const g = (bySource[src] ||= { leads: 0, becameWork: 0, won: 0, wonValue: 0 });
             g.leads++;
             if (mine.length) g.becameWork++;
@@ -1116,7 +1116,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
         const who = a.who || 'all';
         const m = (n, d) => Date.now() - (Number(n) > 0 ? Number(n) : d) * 30.4 * 864e5;
         const links = contactRecords(cx.ws.id);
-        const seen = (r) => jobsOpen(cx) && db.projects[r.projectId] && PJ.sees(db.projects[r.projectId], cx.memberId);
+        const seen = (r) => jobsOpen(cx) && db.projects[r.projectId] && PJ.seesRec(r, cx.memberId);
         const jobs = new Map([...links].map(([id, list]) => [id, list.filter(seen).sort((p, q) => jobDate(q) - jobDate(p))[0]]).filter(([, r]) => r)); // contact id → their latest job or deal they can see
         const out = [];
         for (const c of Object.values(db.contacts)) {
@@ -1365,7 +1365,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
   const recTitle = (id) => {
     const r = db.records[id];
     const p = r && db.projects[r.projectId];
-    if (labelCx && (!r || r.wsId !== labelCx.ws.id || !PJ.sees(p, labelCx.memberId))) return null;
+    if (labelCx && (!r || r.wsId !== labelCx.ws.id || !PJ.seesRec(r, labelCx.memberId))) return null;
     const t = p?.types.find((x) => x.id === r.typeId);
     return t ? String(r.values[t.primary] ?? '') || 'Untitled' : null;
   };
@@ -1408,7 +1408,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
         const c = isAdminId(cx.ws.id, cx.memberId) && !offWhy(cx.ws, cx.memberId, 'contacts') && !cutOff(cx, 'contacts') ? Object.values(db.contacts).find((x) => x.wsId === cx.ws.id && (same(x.name, v) || same(x.email, v) || x.id === v)) : null;
         if (c) out[f.id] = c.id; else bad.push(`${k} (${isAdminId(cx.ws.id, cx.memberId) ? 'save the contact first' : 'only owners and admins pick contacts'})`);
       }
-      else if (f.type === 'link') out[f.id] = (Array.isArray(v) ? v : [v]).map((x) => (PJ.recordAt(String(x), cx.ws.id, cx.memberId) ? x : Object.values(db.records).find((r) => r.typeId === f.target && r.wsId === cx.ws.id && PJ.sees(db.projects[r.projectId], cx.memberId) && (same(recTitle(r.id), x) || Object.values(r.values).some((y) => typeof y === 'string' && y.includes('@') && same(y, x))))?.id)).filter(Boolean);
+      else if (f.type === 'link') out[f.id] = (Array.isArray(v) ? v : [v]).map((x) => (PJ.recordAt(String(x), cx.ws.id, cx.memberId) ? x : Object.values(db.records).find((r) => r.typeId === f.target && r.wsId === cx.ws.id && PJ.seesRec(r, cx.memberId) && (same(recTitle(r.id), x) || Object.values(r.values).some((y) => typeof y === 'string' && y.includes('@') && same(y, x))))?.id)).filter(Boolean);
       else if (f.type === 'checklist') out[f.id] = { items: (Array.isArray(v) ? v : String(v).split('\n')).map((x) => (typeof x === 'object' ? { text: cleanText(x.text, 300), done: !!x.done } : { text: cleanText(String(x).replace(/^[-*\s[\]x]+/i, ''), 300) })).filter((x) => x.text).slice(0, 60) };
       else out[f.id] = String(v).slice(0, 8000);
     }

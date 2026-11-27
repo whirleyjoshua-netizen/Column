@@ -1232,6 +1232,7 @@ function jobBack(rec) {
 function visitNews(rec) {
   stepsSoon(rec.wsId);
   broadcast(rec.wsId, { type: 'visits', recordId: rec.id, projectId: rec.projectId, visits: visitsOf(rec.id) });
+  PJ.reseeJob(rec); // who's on its visits decides who sees it, in a team set to "members see only theirs" (PHASE5.md §5)
 }
 // One visit's entries made to match: date, times, what kind, a note, who's going (copies made or removed), done.
 function setVisit(ws, auth, rec, visitId, body, old = []) {
@@ -1271,6 +1272,7 @@ function setVisit(ws, auth, rec, visitId, body, old = []) {
   if (!old.length) advanceJob(rec, kind, false);
   if (body.done === true) advanceJob(rec, kind, true);
   visitNews(rec);
+  JF.wake(rec.id);
   const v = publicVisit(out);
   hook(ws.id, !old.length ? 'visit.scheduled' : body.done === true && !old.every((e) => e.done) ? 'visit.done' : 'visit.changed', () => API.apiVisit(v), auth.member);
   return v;
@@ -1287,6 +1289,7 @@ function dropVisit(ws, rec, list, by) {
   save();
   syncJob(rec, was);
   visitNews(rec);
+  JF.wake(rec.id);
   hook(ws.id, 'visit.cancelled', () => v, by);
 }
 // Who a job is for, as other apps see it: its contact, and the address the work is at.
@@ -2963,7 +2966,7 @@ function campaignOf(kind, x) {
 }
 // Each person's Day is their own: entries, and the calendar events pulled into them, are seen only by them.
 const seesEntry = (e, memberId) => !e || e.memberId === memberId;
-const canSee = (auth, kind, x) => !((kind === 'campaign' || kind === 'goal') && isJobRun(db.campaigns[campaignOf(kind, x)])) && seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId) && (!jobStackOfItem(x) || seesStack(jobStackOfItem(x), auth.memberId)))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
+const canSee = (auth, kind, x) => kind === 'record' ? PJ.seesRec(x, auth.memberId) : !((kind === 'campaign' || kind === 'goal') && isJobRun(db.campaigns[campaignOf(kind, x)])) && seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId) && (!jobStackOfItem(x) || seesStack(jobStackOfItem(x), auth.memberId)))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -4102,6 +4105,8 @@ function automate(wsId, kind, ctx = {}) {
     const cx = withJob(x, ctx);
     if (!autoMatches(x.trigger, cx)) continue;
     if (ctx.ownersOnly && !isAdminId(wsId, x.memberId)) continue;
+    // An automation acts as its maker: never on a job its maker can't see (PHASE5.md §5).
+    if (cx.record?.id && db.records[cx.record.id] && !PJ.seesRec(db.records[cx.record.id], x.memberId)) continue;
     if (priv) {
       const mine = (x.trigger.campaignId && x.trigger.campaignId === (cx.campaign?.parentId || cx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId))
         || (x.trigger.projectId && x.trigger.projectId === cx.project?.id && PJ.sees(cx.project, x.memberId));
@@ -4205,6 +4210,10 @@ function jobSteps(wsId, by, byId) {
     if (stepsBusy === 1 && JF.autoBill(wsId)) jobStepsOnce(wsId, by, byId);
     // Phase 4: what's kept the first time a step is met (a check-in's round end, stock used, a campaign made).
     if (stepsBusy === 1 && JF.linksSweep(wsId)) jobStepsOnce(wsId, by, byId);
+    // A moved job's Tasks step gets its tasks when the job reaches it (PHASE5.md §6).
+    if (stepsBusy === 1 && JF.tasksSweep(wsId)) jobStepsOnce(wsId, by, byId);
+    // A run's current step moving gives or takes the job from members it names (PHASE5.md §5).
+    if (stepsBusy === 1) JF.reseeRuns(wsId);
     for (let i = 0; i < 5 && stepsAgain && stepsBusy === 1; i++) { stepsAgain = false; jobStepsOnce(wsId, 'Kloomie', null); }
   } catch (e) { alarm('Checking job steps failed', e); }
   finally { stepsBusy--; busyFlowing = was; }
@@ -4546,7 +4555,8 @@ function runWaits(now) {
     // Still allowed? Something may have become private while it waited.
     const priv = !!(ctx.private || ctx.campaign?.private || ctx.project?.private);
     const mine = (x.trigger.campaignId && x.trigger.campaignId === (ctx.campaign?.parentId || ctx.campaign?.id) && seesCampaign(x.trigger.campaignId, x.memberId)) || (x.trigger.projectId && x.trigger.projectId === ctx.project?.id && PJ.sees(ctx.project, x.memberId));
-    if ((priv && !mine) || (ctx.ownersOnly && !isAdminId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
+    const hidden = ctx.record?.id && db.records[ctx.record.id] && !PJ.seesRec(db.records[ctx.record.id], x.memberId); // a job its maker can't see now (PHASE5.md §5)
+    if ((priv && !mine) || hidden || (ctx.ownersOnly && !isAdminId(x.wsId, x.memberId))) { autoLog(x, false, 'A waiting run was dropped: what it’s about is private now'); continue; }
     const log = [];
     log.path = [];
     if (w.agentRun) log.push(answered ? (ctx.answer ? 'Got the answer' : 'The agent finished with no answer') : 'The agent didn’t answer in 30 minutes; went on without it');
@@ -4583,6 +4593,7 @@ function testCtx(x, auth) {
     const ctx = ctxBack(e.ctx);
     if (!autoMatches(x.trigger, ctx)) continue;
     if (ctx.project && !PJ.sees(ctx.project, auth.memberId)) continue;
+    if (ctx.record?.id && db.records[ctx.record.id] && !PJ.seesRec(db.records[ctx.record.id], auth.memberId)) continue;
     if (ctx.campaign?.id && !seesCampaign(ctx.campaign.id, auth.memberId)) continue;
     return { ctx, about: `The last time: ${autoAbout(ctx) || FL.EVENT[x.trigger.kind].label.toLowerCase()} (${new Date(e.at).toISOString().slice(11, 16)} UTC)`, sample: false };
   }
@@ -5084,7 +5095,7 @@ function runDateTriggers(now) {
     const today = L.date;
     x.dateRan ||= {};
     for (const rec of Object.values(db.records)) {
-      if (rec.projectId !== p.id || rec.typeId !== lt.id) continue;
+      if (rec.projectId !== p.id || rec.typeId !== lt.id || !PJ.seesJob(rec, x.memberId, p, lt)) continue;
       const d = PJ.dateOf(p, lt, rec, tr.fieldId);
       if (!d || x.dateRan[rec.id] === d) continue;
       const fire = addDays(d, tr.days);
@@ -8957,9 +8968,28 @@ async function api(req, res, url) {
     return send(res, 200, forecast(ws, auth, Math.max(1, Math.min(FC_MAX_WEEKS, n || FC_WEEKS))));
   }
   if (a === 'schedule' && m === 'GET') {
-    const day = new URL(req.url, 'http://x').searchParams.get('date');
+    const sp = new URL(req.url, 'http://x').searchParams;
+    // Everyone's lanes: owners and admins, and members when the team's schedule is on for them (PHASE5.md §3).
+    const everyone = isAdmin(auth) || memberMay(ws, auth, 'teamSchedule');
+    const people = everyone ? ws.members.map((x) => ({ id: x.id, name: x.name })) : ws.members.filter((x) => x.id === auth.memberId).map((x) => ({ id: x.id, name: x.name }));
+    // The week (its Sunday): each person, each day, the job visits they're on, for the jobs this person may see.
+    if (sp.has('week')) {
+      const week = sp.get('week');
+      if (!isDay(week || '') || new Date(week + 'T12:00:00Z').getUTCDay() !== 0) return send(res, 400, { error: 'Pick a week by its Sunday.' });
+      const days = Array.from({ length: 7 }, (_, i) => addDays(week, i));
+      const groups = new Map();
+      for (const e of Object.values(db.entries)) {
+        if (e.wsId !== ws.id || !e.visitId || e.date < days[0] || e.date > days[6]) continue;
+        const rec = db.records[e.recordId];
+        if (!rec || !PJ.recordAt(rec.id, ws.id, auth.memberId)) continue;
+        (groups.get(e.visitId) || groups.set(e.visitId, []).get(e.visitId)).push(e);
+      }
+      const visits = [...groups.values()].map((list) => ({ ...publicVisit(visitEntries(list[0].visitId)), label: jobLabel(db.records[list[0].recordId]), projectId: db.records[list[0].recordId].projectId }));
+      const sortV = (x, y) => (x.start ?? -1) - (y.start ?? -1);
+      return send(res, 200, { week, days, people: people.map((pp) => ({ ...pp, cells: days.map((d) => visits.filter((v) => v.date === d && v.memberIds.includes(pp.id)).sort(sortV).map((v) => ({ id: v.id, kind: v.kind, label: v.label, recordId: v.recordId, projectId: v.projectId, start: v.start ?? null, end: v.end ?? null, done: !!v.done }))) })) });
+    }
+    const day = sp.get('date');
     if (!isDay(day || '')) return send(res, 400, { error: 'Pick a day.' });
-    const everyone = isAdmin(auth);
     const groups = new Map();
     for (const e of Object.values(db.entries)) {
       if (e.wsId !== ws.id || !e.visitId || e.date !== day || (!everyone && e.memberId !== auth.memberId)) continue;
@@ -8974,14 +9004,17 @@ async function api(req, res, url) {
     for (const rec of Object.values(db.records)) {
       if (rec.wsId !== ws.id || waiting.length >= 60) continue;
       const j = jobOfRecord(rec);
-      if (!j || !j.t.fields.some((f) => f.type === 'contact') || !PJ.recordAt(rec.id, ws.id, auth.memberId)) continue;
+      if (!j || !PJ.recordAt(rec.id, ws.id, auth.memberId)) continue;
+      // A job on a flow waits to be scheduled when its run is at a Book step; one not on a flow by the old rule below.
+      const run = JF.activeRun(rec.id);
       const st = j.t.fields.find((f) => f.key === 'status');
       const stage = st?.choices.find((x) => x.id === rec.values[st.id])?.label || '';
-      if (/^(done|installed|complete|paid|invoiced|skipped|claim paid)$/i.test(stage)) continue;
+      if (run) { const cur = JF.runView(ws, auth, run)?.steps?.find((x) => x.state === 'current'); if (cur?.kind !== 'book') continue; } // its run decides, not its stage
+      else if (!j.t.fields.some((f) => f.type === 'contact') || JF.runsOf(rec.id).some((c) => c.status === 'done') || /^(done|installed|complete|paid|invoiced|skipped|claim paid)$/i.test(stage)) continue;
       if (visitsOf(rec.id).some((v) => !v.done && v.date >= today)) continue;
       waiting.push({ recordId: rec.id, projectId: rec.projectId, label: jobLabel(rec), stage, list: j.t.singular || j.t.name, icon: j.t.icon || '' });
     }
-    return send(res, 200, { date: day, visits, waiting, members: everyone ? ws.members.map((x) => ({ id: x.id, name: x.name })) : ws.members.filter((x) => x.id === auth.memberId).map((x) => ({ id: x.id, name: x.name })), kinds: VISIT_KINDS });
+    return send(res, 200, { date: day, visits, waiting, members: people, kinds: VISIT_KINDS });
   }
 
   if (a === 'entries') {
@@ -11032,6 +11065,7 @@ async function api(req, res, url) {
     }
     save();
     broadcast(ws.id, { type: 'workspace' });
+    PJ.reseeWs(ws.id); // a role on a job's current step decides who sees it (PHASE5.md §5)
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
@@ -11304,6 +11338,7 @@ async function api(req, res, url) {
       if (auth.role !== 'owner' && target.role !== 'member') return send(res, 403, { error: 'Only team owners can change other admins and owners.' });
       if (m === 'DELETE') {
         await removeMember(ws, target, { removed: true });
+        PJ.reseeAll(ws.id);
         return send(res, 200, publicWorkspace(ws, auth.memberId));
       } else if (c === 'reset' && m === 'POST') {
         // Someone with an account resets it from their email; without email working, they're unlinked
@@ -11325,6 +11360,9 @@ async function api(req, res, url) {
         if (!['owner', 'admin', 'member'].includes(role)) return send(res, 400, { error: 'Pick owner, admin or member.' });
         if (target.role === 'owner' && role !== 'owner' && !ws.members.some((x) => x.role === 'owner' && x.id !== target.id)) return send(res, 400, { error: 'A team needs an owner.' });
         target.role = role;
+        // Their sight of jobs follows their role now: their app loads again, and the seers are worked out afresh.
+        PJ.reseeAll(ws.id);
+        if (ws.settings?.visibility === 'own') broadcast(ws.id, { type: 'resync', forMember: target.id });
       } else return send(res, 405, { error: 'Method not allowed' });
     }
     save();
@@ -11509,7 +11547,7 @@ async function api(req, res, url) {
     }
     save();
     broadcast(ws.id, { type: 'workspace' });
-    if ((ws.settings.visibility || 'all') !== was) for (const m2 of ws.members) if (!isAdminId(ws.id, m2.id)) broadcast(ws.id, { type: 'resync', forMember: m2.id });
+    if ((ws.settings.visibility || 'all') !== was) { PJ.reseeAll(ws.id); for (const m2 of ws.members) if (!isAdminId(ws.id, m2.id)) broadcast(ws.id, { type: 'resync', forMember: m2.id }); }
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
@@ -12445,7 +12483,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ docsOf, bizHtml, inkedPng, jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
+const PJ = projectsModule({ jobCurrentWho: (rec) => JF.currentWho(rec), onTouch: (rec) => JF.wake(rec.id), docsOf, bizHtml, inkedPng, jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => recordGoneAll(rec), stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
@@ -12653,7 +12691,7 @@ const BOOK = bookingsModule({ bind: OAUTH_BIND, db, save, broadcast, cleanText, 
   contactsOf, newContact, applyContact, emailKey, phoneKey, contactNews, CONTACT_MAX, automate: (...a) => automate(...a), notify: (wsId, memberId, n) => memberId && notify(wsId, memberId, n), userOf, tzOf, localNow,
   privateRecord: (id) => privateRecord(id),
   // The contact's job on a board the host can see (column-f9's review), else none: then it goes on their day.
-  jobFor: (ws, contactId, memberId) => Object.values(db.records).filter((r) => r.wsId === ws.id && !db.projects[r.projectId]?.archived && memberId && PJ.sees(db.projects[r.projectId], memberId) && (() => { const f = contactField(r); return f && r.values[f.id] === contactId; })())
+  jobFor: (ws, contactId, memberId) => Object.values(db.records).filter((r) => r.wsId === ws.id && !db.projects[r.projectId]?.archived && memberId && PJ.seesRec(r, memberId) && (() => { const f = contactField(r); return f && r.values[f.id] === contactId; })())
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null,
   recCtx: (id) => { const rec = db.records[id], p = rec && db.projects[rec.projectId], lt = p && typeOfP(p, rec.typeId); return rec && lt ? { record: rec, project: p, list: lt, recordName: String(rec.values[lt.primary] ?? '') } : null; },
   bookVisit: (ws, rec, o) => { const by = ws.members.find((m) => m.id === o.memberId); if (!by) return null; return setVisit(ws, { member: by.name, memberId: by.id, deviceId: null }, rec, rid(), { kind: visitKindFor(o.title), date: o.date, start: o.start, end: o.end, memberIds: [by.id], note: o.note }); },
@@ -12831,7 +12869,7 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const JF = jobFlowsModule({ sendGate: (...a) => sendGate(...a), custPreview: (...a) => custPreview(...a), custDigest: (...a) => custDigest(...a), notify: (...a) => notify(...a), notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL, stock: STOCK,
+const JF = jobFlowsModule({ memberMay: (ws, auth, k) => memberMay(ws, auth, k), sendGate: (...a) => sendGate(...a), custPreview: (...a) => custPreview(...a), custDigest: (...a) => custDigest(...a), notify: (...a) => notify(...a), notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL, stock: STOCK,
   geocode: (addr) => (routesOn() ? geocodeOnce(addr, 5000) : Promise.resolve(undefined)), mapsOn: () => routesOn(),
   presetsOf: (wsId) => presetsOf(wsId), templateFor: (ws, auth, id) => { const t = db.templates[id]; return t && t.wsId === ws.id && seesTemplate(t, auth.memberId) ? t : null; },
   campaignFromSnapshot: (...a) => campaignFromSnapshot(...a), stockMove: (...a) => STOCK.move(...a) });
@@ -13561,7 +13599,7 @@ async function buildExport(x) {
     myAgents: (y) => y.memberId === me.id,
     projects: (y) => PJ.sees(y, me.id),
     boards: (y) => !y.trashedAt && WB.sees(y, me.id),
-    records: (y) => PJ.sees(db.projects[y.projectId], me.id),
+    records: (y) => PJ.seesRec(y, me.id),
     projectTemplates: () => !mineOnly,
     webhooks: () => !mineOnly && me.role === 'owner',
     contacts: () => !mineOnly && me.role === 'owner',
@@ -13715,6 +13753,7 @@ runAutopay();
 migratePeople();
 migrateDay();
 PJ.moveLicensesOut();
+PJ.reseeAll(); // who sees each job now, so the first change after a restart tells only those it changes for
 dropCutImports();
 flowsStart();
 server.listen(PORT, '0.0.0.0', () => {

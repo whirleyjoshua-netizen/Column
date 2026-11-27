@@ -207,7 +207,7 @@ try {
   ok(!/INV-\d/.test(seenBySam) && !/"(balance|amount|paid|subtotal|invoiceId|number)"/.test(seenBySam) && !/\$\d|50\.00|5000/.test(seenBySam), 'and gets no invoice numbers, amounts or balances (the run’s “total” is its count of steps)');
   ok(r.body?.run?.steps?.find((s) => s.kind === 'custom')?.text === 'Smile at the customer.', 'the step’s instructions are there');
   ok(typeof r.body?.run?.current?.missing === 'string' && r.body.run.current.missing.length > 0, 'and what the current step is waiting for, in words');
-  const job5 = (await rico('POST', '/jobs', { flowId: flow2.id, values: { job: 'Private tasks job' } })).body?.job;
+  const job5 = (await rico('POST', '/jobs', { flowId: flow2.id, values: { job: 'Private tasks job', crew: samId } })).body?.job; // Sam's (Assigned to), so he sees the job in an "own" team (PHASE5.md §5)
   const t5 = (await rico('GET', `/jobs/${job5?.id}/run`)).body?.run?.steps?.find((s) => s.kind === 'tasks')?.tasks || [];
   await rico('PATCH', `/tasks/${t5[0]?.id}`, { assigneeId: kimId });
   await rico('PATCH', `/tasks/${t5[1]?.id}`, { assigneeId: kimId });

@@ -1,0 +1,182 @@
+=== jobs_tab (on main 3af3b91 + contract) ===
+FAIL the Overview answers: 404 That job is gone.
+FAIL To quote: the job at a Quote step
+FAIL To book: the jobs at a Book step (one after its quote was accepted)
+FAIL Booked today: a job with two visits today counts once, a job not on a flow counts too, yesterday’s doesn’t
+FAIL To invoice: the job at an Invoice step
+FAIL Waiting for payment: the job at a Payment step
+PASS a job is in at most one of To quote, To book, To invoice and Waiting for payment
+PASS jobs not on a flow are only ever in Booked today (yesterday’s and tomorrow’s visits don’t count)
+PASS every job counted is in the Jobs list
+PASS no amounts in the Overview
+FAIL a member gets the Overview too, without amounts
+PASS with Boards off for members, a member gets no Overview
+FAIL Clients answers: 404 That job is gone.
+FAIL each client with how many jobs and how many are open
+FAIL a contact in the Clients group is listed for owners, with no jobs
+FAIL owners get each client’s balance owed and unpaid invoices
+FAIL a paid invoice and a draft don’t count: Hal owes $100 on one invoice: undefined
+FAIL open quotes: sent and not answered (Eli’s accepted one doesn’t count)
+PASS only contacts are listed
+FAIL an admin gets the same list
+FAIL a member with Contacts off gets no Clients
+FAIL a member with Contacts on gets Clients
+PASS a member doesn’t get the client groups, only clients of jobs they see
+PASS a member gets no balance, invoices or quotes
+FAIL the week: its Sunday and seven days: 400 Pick a day.
+FAIL each person, each day: the visits (kind, job, time)
+FAIL a job not on a flow is on the week too
+PASS a week has to be a date
+PASS switch off: a member sees their own lane only
+FAIL switch off: a member’s week is their own row only
+FAIL switch on: a member sees everyone’s lanes
+FAIL switch on: a member’s week has everyone
+PASS Jobs to schedule: the job at a Book step
+FAIL a flow job not at a Book step isn’t listed (at Quote, Invoice, Payment)
+PASS jobs not on a flow: open with nothing booked, or only a past visit, are listed
+PASS a visit today (any time) or later counts as booked ahead: not listed
+23 failed
+=== jobs_own (on main 3af3b91 + contract) ===
+PASS board records: Sam gets each job that’s his (made, person field, visit, current step, current step’s role)
+FAIL board records: not the job that isn’t, not Mia’s, not one where his step is later
+PASS board records: a record in another list is unchanged
+PASS an admin gets every job
+PASS the owner too
+FAIL the record’s timeline: 404 for the other job, 200 for his
+FAIL changing the other job: 404
+FAIL its visits: 404
+FAIL its run: 404 (and the later-step job’s)
+FAIL the Jobs list: his jobs only
+FAIL the Overview: counts over his jobs only
+FAIL the day’s schedule (team switch on): everyone’s lanes, but not the other job’s visit
+FAIL Jobs to schedule: not the other jobs
+FAIL the week: not the other job
+PASS (control) the owner’s Map → Jobs has the other job
+FAIL Map → Jobs: not the other job
+FAIL a contact’s records: not the other job
+FAIL Clients: answers, without the other job’s client
+FAIL state: not the other job’s stack or its note (search reads state)
+FAIL state: the other job’s name and id are nowhere
+FAIL its chat pin is there as a locked chip, with no id or name: {"pid":"a1ZOpSaNCuM","kind":"job","id":"rtEKL3lXvngmh_b3","label":"OTHERJOBXYZ","icon":"🛠️","next":null}
+PASS (control) the owner’s pin is the job, by name
+PASS his job that links to the other: no name for it
+FAIL read_record on the other job: refused, no name: {"data":{"id":"rtEKL3lXvngmh_b3","about":"A Cleaning in the project “Jobs”: OTHERJOBXYZ.\nCustomer: Olga Other\nStatus: 
+FAIL find_records by its name: nothing: {"data":{"count":2,"records":[{"id":"rtEKL3lXvngmh_b3","project":"Jobs","list":"Cleaning","name":"OTHERJOBXYZ","Customer
+FAIL read_record on his job that links to it: his job, the link without its name or id: {"data":{"id":"1Bjcy9I1OBNSVGrV","about":"A Cleaning in the project “Jobs”: Assigned to Sam.\nStatus: New\nAssigned to: Sam Reed\nChecklist: 0 of 7 done\nRelate
+PASS (control) Ask about his own job: the AI is given that job: 200
+FAIL Ask (search): what the AI is told has no sign of the other job: 200
+FAIL his export: his jobs, not the other (by name or id)
+PASS the API, maker an admin: every job
+FAIL maker made a member: the other job is gone from the list and its read 404s
+FAIL live: Sam gets his job’s update and nothing about the other
+PASS booked onto its visit: Sam gets the job
+FAIL Kim (nothing to do with it) doesn’t
+PASS and can read it
+FAIL visit given back to Mia: Sam gets record:gone
+PASS Mia (on the visit), the admin and Kim don’t
+FAIL and Sam’s next read 404s
+FAIL a new visit with Sam on Mia’s job: Sam gets it, Kim doesn’t
+PASS and Sam can read it
+PASS (the visit is removed) 200
+FAIL the visit removed: Sam gets record:gone
+PASS Mia (who made it) and the admin don’t
+FAIL and Sam’s next read 404s
+FAIL person field changed to Mia: Sam gets record:gone
+PASS and Mia gets the job
+FAIL a later step of his becomes current: Sam gets the job
+PASS and can read its run
+PASS Sam does his step: 200 
+FAIL the run moves on: Sam gets record:gone
+FAIL and the next read 404s
+PASS (an admin reopens Sam’s step) 200 
+FAIL his step reopened: Sam gets the job again
+PASS and can read its run
+PASS (the run on Sam’s step job is cancelled) 200
+FAIL run cancelled: Sam gets record:gone
+FAIL and it’s gone from his next read
+FAIL taken out of the Crew role: Sam loses the Crew job (record:gone or a resync)
+FAIL and it’s gone from his next read
+PASS (Kim sees the job she made)
+PASS (Kim is removed from the team) 200
+PASS Kim’s next read is refused
+PASS and her socket hears nothing more about it
+PASS made an admin: Sam sees every job
+PASS made a member again: his app is told to reload
+FAIL and the next read is his jobs only
+PASS switching to all: his app reloads
+PASS with all, Sam sees every job (nothing else changes)
+PASS switching back to own: his app reloads
+FAIL and his next read is his jobs only again
+40 failed
+=== jobs_move (on main 3af3b91 + contract) ===
+FAIL a member can’t see Move my jobs here
+FAIL Move my jobs here answers: 404 That job is gone.
+FAIL board A: 7 jobs not on a flow (the legacy one included), 1 of them on campaign steps: undefined
+FAIL with the flows for that list and how many jobs are at each stage: undefined
+FAIL a cleaning trade’s list suggests the Cleaning visit start: undefined
+FAIL a list that isn’t a trade’s suggests Service call: undefined
+FAIL a member can’t move jobs
+FAIL an admin moves board A: 6 moved: 404 {"error":"That job is gone."}
+FAIL the legacy job is reported, not moved
+FAIL New: on Client, nothing skipped: 
+FAIL Scheduled: Client met (it had a client), on Book: 
+FAIL Done: Client, Book, Remind skipped with the reason, on Clean: 
+FAIL In progress: Client and Book met (client, visit booked), on Remind: 
+FAIL Invoiced: Client met, Book, Remind, Clean skipped, on Wrap up: 
+FAIL Paid (the last stage): Client met, every other step skipped with the reason, the run done:  undefined
+PASS the legacy job has no run
+PASS the job already on the flow is untouched
+PASS none of the six moved jobs’ stages move: New,Scheduled,Done,In progress,Invoiced,Paid
+PASS nothing sent (the outbox is as it was)
+PASS no step.done or job.flow.done automations ran
+PASS the Tasks step a job landed on made no tasks (no tasks made at all)
+PASS no campaigns made
+PASS no invoices made
+FAIL the reminder the job landed on waits for an OK, though its step says send by itself: null
+FAIL a member can’t send it
+PASS still nothing sent
+FAIL an owner sends it: it goes, once: 404 This job isn’t on a flow.
+FAIL the timeline says it was moved, and at which step
+PASS no notices about steps (only the reminder’s ready-to-send)
+FAIL the next real change sweeps it as any job (Book done fires its automation)
+PASS (control) a job finishing its flow normally fires job.flow.done
+FAIL board D’s three jobs move: {"error":"That job is gone."}
+FAIL each on its step (the playbook, gear out, the invoice)
+FAIL the work step before the invoice was met (its checklist was done)
+PASS landing on the campaign step started no campaign and made no tasks
+PASS no stock used and no gear checked out (the work step met before the move used none)
+PASS landing on the automatic invoice step made no invoice
+FAIL after a real change, its automatic invoice is drafted as normal
+FAIL and the campaign step starts its campaign as normal
+PASS (control setup) a normal job on board D: 200 
+PASS (control) a normal job reaching the campaign step starts its campaign
+PASS (control) the normal job is at Gear out
+PASS (control) checking gear out on it works: a washer is out: 200 
+PASS (control) and Gear out is done
+PASS (control) its work step done uses the stock
+PASS (control) and its automatic invoice is drafted
+FAIL two steps at Scheduled: it lands on the later one (Book), Prep skipped: 
+FAIL a stage no step names, and no stage: the first step:  
+FAIL recordIds: only those move
+FAIL moving it again moves nothing: “already on a flow”
+PASS a flow that isn’t there: 404
+FAIL a flow for another list: 400
+FAIL mixed recordIds: the good one moves: {"error":"That job is gone."}
+FAIL a deleted record and an id that was never there: “gone”; another list’s job: “another list”:  |  | 
+FAIL and the other list’s job is untouched
+FAIL with a start: both move: 404 That job is gone.
+FAIL the flow is made from the start, published, for that list
+FAIL the Cleaning visit start’s steps, with a Visit reminder after Book and a Review request at the end: 
+PASS both set to Ask me first (send: ask)
+FAIL with the switches off, no reminder or review steps
+FAIL each job at the step for its stage
+FAIL a start that isn’t one: 400
+PASS two overlapping moves and a put-on-a-flow: exactly one puts the job on the flow: 404:That job is gone. | 404:That job is gone. | 200:
+PASS and the job is listed once
+PASS on the flow asked for
+PASS restarted
+FAIL the moved jobs are still on their flows
+PASS the raced job still has its one run (the same one)
+FAIL in what’s saved, each of them has exactly one run
+FAIL nothing sent after the restart; the reminder still waits
+42 failed
