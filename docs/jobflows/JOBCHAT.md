@@ -176,3 +176,19 @@ jobs_tab_ui, member_access_ui.
 2. **The safety net respects the switch.** The sweep makes feeds only while Make a chat for each new job is on. Turning
    it on sets `ws.jobChatsSince = now` (each time), so jobs made while it was off don't get one afterwards (only on
    demand). Turning it off stops both the hook and the sweep; feeds already made stay.
+
+## 10. Checkpoint 2: the tests (written first; on `jobchat` before any server change: 48 of jobchat.mjs's checks and
+10 of jobchat_ui.mjs's fail, log in docs/jobflows/jobchat-checkpoint2.log)
+Shapes the tests fix:
+- `PATCH /workspace { jobChats }` → `workspace.jobChats` (true by default). Chat folders carry `jobs: true` / `stacks: true`.
+- A job feed in `workspace.channels`: `{ id, name, folderId, recordId, stackId, pins: [{kind:'job', id}] }`; its stack
+  `{ recordId, channelId }`. `jobs[].chatId` in `GET /jobs`, `chatId` on the record.
+- `GET /jobs/:id/chat` → `{ feed: null }` or `{ feed, items }` (feed `archived` when it is); `POST /jobs/:id/chat` →
+  `{ feed }`. `POST /channels/:id/stack` → `{ stack }` (a body naming another stack is ignored).
+  `POST /channels/:id/reopen` (owners and admins).
+- Found while writing them, and fixed here: `DELETE /stacks/:id` and `PATCH /stacks/:id` check only `seesCampaign`, so
+  anyone who has a job's stack id can delete it today, and its files fall back into the team's Stacks (their
+  `stackId` is cleared). Both now use `seesStack`, and deleting a stack that belongs to a job or a feed is refused (400,
+  delete the job or the feed instead).
+- In the app: `.ch-tabs [data-ft=all|chat|files]` on the feed; the tab kept in `localStorage['column.feedTab:<id>']`;
+  `.jb-chat` (💬 with the unread count) on `.jb-row` and on the job page's `.jb-card`.
