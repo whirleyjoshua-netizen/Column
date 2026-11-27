@@ -166,3 +166,13 @@ jobs_tab_ui, member_access_ui.
 14. **In the app, losing the job while its chat is open** (Phase 5's `record:gone` / `jbGone`): the chat, its split or
     sheet close; the feed, its stack and their items leave the app's state; a drag or upload aimed at them is dropped;
     the Files tab never shows what's cached; the toast "You no longer have this job".
+
+## 9. Review round 2 (ChatGPT, chat #10): two more
+1. **Files follows Chat, on every path.** A member (not an owner or admin) in a team with Chat off for members fails
+   `seesFeed` for every feed (plain, campaign, job), and fails `seesStack` for any stack linked to a feed, so the feed's
+   Files can't be reached through the stack either: stack reads, uploads into it, item routes, search, request links'
+   owner pages, export. Their Stacks switch doesn't matter for a linked stack. #general is unchanged (its messages are
+   already filtered by the Chat switch; it has no stack). Owners and admins as before.
+2. **The safety net respects the switch.** The sweep makes feeds only while Make a chat for each new job is on. Turning
+   it on sets `ws.jobChatsSince = now` (each time), so jobs made while it was off don't get one afterwards (only on
+   demand). Turning it off stops both the hook and the sweep; feeds already made stay.
