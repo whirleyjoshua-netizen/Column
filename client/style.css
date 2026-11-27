@@ -5215,3 +5215,37 @@ body:not(.wide) .cc-phases { padding: 12px 10px; }
 .jb-chat { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .jb-chat-n { background: var(--accent); color: #fff; border-radius: 999px; font-size: 10px; font-weight: 700; padding: 1px 6px; }
 .jb-chat-n.at { background: #f5b942; color: #1a1a1a; }
+/* Settings → Website (websites.js): your site, a request moving along, packages to pick, and Kloomie staff's list. */
+.web-sec h4, .web-ask h4 { margin: 16px 0 6px; font-size: 13px; }
+.web-own a { font-weight: 600; }
+.web-own-edit { display: block; margin: 8px 0; font-size: 13px; color: var(--muted); }
+.web-own-edit .ai-key { display: flex; gap: 6px; margin-top: 4px; }
+.web-own-edit input { flex: 1; min-width: 0; }
+.web-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; list-style: none; padding: 0; margin: 6px 0 10px; counter-reset: ws; }
+.web-steps li { counter-increment: ws; font-size: 12.5px; text-align: center; padding: 8px 4px 6px; border-top: 3px solid var(--line); color: var(--muted); }
+.web-steps li::before { content: counter(ws) " · "; }
+.web-steps li.done { border-color: var(--accent); color: var(--text); }
+.web-steps li.on { border-color: var(--accent); color: var(--accent); font-weight: 650; }
+.web-updates { list-style: none; padding: 0; margin: 0 0 8px; font-size: 13px; }
+.web-updates li { padding: 4px 0; border-top: 1px solid var(--line); }
+.web-updates small { color: var(--muted); }
+.web-pkgs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.web-pkg { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); font: inherit; cursor: pointer; }
+.web-pkg:hover { border-color: var(--accent); }
+.web-pkg.on { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.web-pkg .web-price { font-size: 22px; font-weight: 800; }
+.web-pkg .web-price small, .web-pkg > small { font-size: 12px; font-weight: 500; color: var(--muted); }
+.web-pkg ul { margin: 2px 0 4px; padding-left: 16px; font-size: 12.5px; }
+.web-pkg.unsure { justify-content: center; }
+.web-ask .web-care { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.web-care span { display: flex; flex-direction: column; gap: 2px; }
+.web-care small { color: var(--muted); font-size: 12.5px; }
+.web-ask label { display: block; margin: 8px 0; font-size: 13px; }
+.web-ask label input:not([type=checkbox]), .web-ask textarea { display: block; width: 100%; margin-top: 4px; }
+.web-req { padding: 10px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.web-req small { color: var(--muted); }
+.web-notes { white-space: pre-wrap; margin: 2px 0 !important; color: var(--text) !important; }
+.web-req-edit { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.web-req-edit input { flex: 1; min-width: 140px; }
+@media (max-width: 640px) { .web-steps { grid-template-columns: repeat(2, 1fr); } }
+.web-ask .web-care input { margin-top: 3px; flex: none; }

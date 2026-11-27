@@ -153,6 +153,13 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     }),
   });
 
+  // A team asking Kloomie to build its website (websites.js): to Kloomie's own people, replies go to whoever asked.
+  const websiteRequest = (to, { team, who, email, lines, replyTo }) => send({
+    to, tag: 'website-request', replyTo,
+    subject: `Website request: ${team}`,
+    ...layout({ heading: `${team} wants a website`, lines: [`From ${who}${email ? ` (${email})` : ''}.`, ...lines], foot: 'Reply to this email to reach them. Move it along in Kloomie: Settings → Website.' }),
+  });
+
   // Getting started: one welcome, then reminders as the free trial runs out (days 3, 1, and 0 = it ended).
   const welcomeEmail = (to, { team, url, trialDays }) => send({
     to, tag: 'welcome',
@@ -188,5 +195,5 @@ ${button ? `<p style="margin:18px 0"><a href="${esc(button.url)}" style="display
     });
   };
 
-  return { mode, send, customerEmail, codeEmail, alertEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady, welcomeEmail, trialEmail };
+  return { mode, send, websiteRequest, customerEmail, codeEmail, alertEmail, resetEmail, inviteEmail, emailChanged, teamDeleting, teamKept, accountDeleted, exportReady, welcomeEmail, trialEmail };
 }

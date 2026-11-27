@@ -339,7 +339,14 @@ ${f('name', 'Your name', 'text', 'required autocomplete="name"')}${f('phone', 'P
     res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600', 'Access-Control-Allow-Origin': '*', 'X-Content-Type-Options': 'nosniff' });
     res.end(SNIPPET);
   }
-  return { route, formPage, webhook, normalize, snippetJs };
+  // Turned on from elsewhere (a website being built for the team, websites.js): a key ready for its form.
+  function turnOn(ws) {
+    const s = settings(ws);
+    if (s.on && s.key) return;
+    ws.leadCapture = { ...s, on: true, key: s.key || crypto.randomBytes(12).toString('base64url') };
+    save();
+  }
+  return { route, formPage, webhook, normalize, snippetJs, turnOn, settings };
 }
 
 const SNIPPET = `/* Kloomie: copies what people send in this site's forms into the team's Kloomie Contacts. */

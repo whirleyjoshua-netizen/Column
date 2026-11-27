@@ -29,6 +29,7 @@ import { quickbooksModule } from './quickbooks.js';
 import { twoStepModule } from './twostep.js';
 import { twilioModule } from './twilio.js';
 import { leadsModule } from './leads.js';
+import { websitesModule } from './websites.js';
 import { dropboxModule } from './dropbox.js';
 import { safeFetch } from './safefetch.js';
 import { oauthBind } from './oauthbind.js';
@@ -8803,6 +8804,8 @@ async function api(req, res, url) {
     if (tw !== null) return;
     const lc = await LEADS.route(req, res, parts, auth, ws);
     if (lc !== null) return;
+    const web = await WEB.route(req, res, parts, auth, ws);
+    if (web !== null) return;
     const dbx = await DBX.route(req, res, parts, auth, ws);
     if (dbx !== null) return;
   }
@@ -9115,7 +9118,7 @@ async function api(req, res, url) {
     return send(res, 200, {
       workspace: publicWorkspace(ws, auth.memberId),
       cloud: cloudPickers(),
-      me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, fileKey: req.replay ? null : fileKeyOf(auth.token), ...meAccount(ws, auth.memberId) },
+      me: { memberId: auth.memberId, member: auth.member, device: auth.device, deviceId: auth.deviceId, fileKey: req.replay ? null : fileKeyOf(auth.token), ...meAccount(ws, auth.memberId), staff: WEB.isStaff(ws, auth.memberId) },
       notices: Object.values(db.notices).filter((n) => n.wsId === ws.id && n.memberId === auth.memberId).sort((p, q) => q.at - p.at).map(publicNotice),
       start: startList(ws, auth),
       items,
@@ -13199,6 +13202,8 @@ const NEWS = newsModule({ db, save, readJson, send, rid, cleanText, aiAsk: (...a
   topics: process.env.ALLOW_LOCAL_FETCH === '1' && process.env.NEWS_TEST_TOPICS ? JSON.parse(process.env.NEWS_TEST_TOPICS) : null });
 const LEADS = leadsModule({ db, save, readJson, send, isAdmin, cleanText, contactsOf, newContact, applyContact, emailKey, phoneKey, EMAIL_RE, contactNews, refreshLiveSoon, automate,
   hook: (wsId, type, x) => hook(wsId, type, () => API.apiContact(x), 'Lead'), notifyAdmins, escHtml, brandOf, logoUrl, clientIp, CONTACT_MAX, publicUrl: PUBLIC_URL, offline, teamDay });
+// Websites Kloomie builds for teams (websites.js): Settings → Website, and Kloomie staff's list of requests.
+const WEB = websitesModule({ db, save, readJson, send, rid, isAdmin, cleanText, notifyAdmins: (...a) => notifyAdmins(...a), mailer, leads: LEADS, userOf, publicUrl: PUBLIC_URL });
 // Two-step sign-in with an authenticator app (twostep.js).
 const TS = twoStepModule({ db, save, seal, unseal, readJson, send, appName: process.env.APP_NAME || 'Kloomie' });
 // QuickBooks Online: invoices and payments into the team's books, payments recorded there back (quickbooks.js).

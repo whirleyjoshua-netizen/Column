@@ -862,7 +862,7 @@
     try { if (navigator.setAppBadge) n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch {}
     if ($('#bellPop') && !$('#bellPop').classList.contains('hidden')) bellList();
   }
-  const NOTE_ICON = { mention: '@', assigned: '👤', up: '▶', files: '📥', quote: '✓', agent: '👥', analytics: '📊' };
+  const NOTE_ICON = { mention: '@', assigned: '👤', up: '▶', files: '📥', quote: '✓', agent: '👥', analytics: '📊', website: '🌐' };
   // Where a notice (or a push someone tapped) takes you.
   function goTo(go) {
     if (!go) return;
@@ -883,6 +883,7 @@
     if (kind === 'analytics') return openAnalytics(id || undefined);
     if (kind === 'mycard') return showMyCard();
     if (kind === 'app') return openApps(id);
+    if (kind === 'settings') return openSettings(id);
     if (kind === 'invreq') { INVS.view = 'requests'; INVS.req = id; openTool('inventory'); return loadInventory(); }
     if (kind === 'auto') { openBarItem('automations'); return api('GET', '/automations').then((l) => { S.automations = l; renderAutos(); const x = l.find((y) => y.id === id); x ? autoSheet(x) : toast('That automation is gone.'); }).catch((e) => toast(e.message)); }
     if (kind === 'card') return openTool('cards');
@@ -19886,6 +19887,111 @@
   const LEAD_VIA = { form: 'Kloomie form', webhook: 'Webhook', snippet: 'Website', test: 'Test' };
   const LEAD_RESULT = { added: 'New contact', updated: 'Updated contact', refused: 'Not added', spam: 'Spam, kept out', test: 'Test, not saved' };
 
+  // ---------- Website (websites.js): get a website built by Kloomie, or connect the one you have ----------
+  // Like Housecall Pro's website service (the owner, 2026-11-25): pick a package and say what you want, see it move
+  // along (asked for, building, review, live), and the site's leads land in Contacts. Kloomie staff also see every
+  // team's request here and move it along.
+  const WEB_STEPS = ['requested', 'building', 'review', 'live'];
+  const webMoney = (n) => '$' + Number(n).toLocaleString('en-US');
+  function websiteSection() {
+    const sec = h('section', { class: 'web-sec' }, h('h3', {}, 'Your website'), h('p', { class: 'day-hint' }, 'Loading…'));
+    const out = [sec];
+    api('GET', '/website').then((x) => {
+      const redo = (y) => { const f = websiteSection(); sec.replaceWith(...f); for (const el of out.slice(1)) el.remove(); return y; };
+      sec.innerHTML = '';
+      sec.append(h('h3', {}, 'Your website'));
+      const r = x.req;
+      // The site they have (or the one we built).
+      const own = h('input', { value: x.own || '', placeholder: 'yourbusiness.com', 'aria-label': 'Your website’s address' });
+      const saveOwn = h('button', { class: 'btn small', onclick: () => api('PUT', '/website', { own: own.value }).then(() => { toast('Saved'); redo(); }, (e) => toast(e.message)) }, 'Save');
+      if (x.own) sec.append(h('div', { class: 'srow web-own' }, h('span', {}, h('a', { href: x.own, target: '_blank', rel: 'noopener' }, x.own.replace(/^https?:\/\//, '')),
+        h('small', {}, x.leads.on ? `${x.leads.count} lead${x.leads.count === 1 ? '' : 's'} from your forms${x.leads.last ? ', the last ' + ago(x.leads.last) : ''}` : 'Its contact form isn’t sending leads to Kloomie yet')),
+        h('button', { class: 'btn', onclick: () => { $('#settings').classList.add('hidden'); openApps('leads'); } }, x.leads.on ? 'Leads' : 'Connect its form')));
+      sec.append(h('label', { class: 'web-own-edit' }, x.own ? 'Change the address' : 'Have a website already? Its address', h('span', { class: 'ai-key' }, own, saveOwn)));
+      if (!x.own) sec.append(h('p', { class: 'day-hint' }, 'Then connect its contact form in Apps & Integrations → Website lead forms, and every lead lands in Contacts.'));
+      // The request, as it moves along.
+      if (r && r.status !== 'cancelled') {
+        const at = WEB_STEPS.indexOf(r.status);
+        const pkg = x.packages.find((p) => p.key === r.pkg);
+        sec.append(h('h4', {}, 'Your website request'),
+          h('ol', { class: 'web-steps' }, WEB_STEPS.map((k, i) => h('li', { class: i < at ? 'done' : i === at ? 'on' : null }, k === 'review' ? 'Review' : x.statusNames[k]))),
+          h('p', {}, `${pkg ? `${pkg.name}, up to ${pkg.pages} pages` : 'Package not picked yet'}${r.care ? ', with website care' : ''}. Asked for by ${r.byName || 'your team'} ${ago(r.at)}.`),
+          r.url ? h('p', {}, 'Address: ', h('a', { href: r.url, target: '_blank', rel: 'noopener' }, r.url.replace(/^https?:\/\//, ''))) : '',
+          h('ul', { class: 'web-updates' }, [...(r.updates || [])].reverse().map((u) => h('li', {}, h('b', {}, x.statusNames[u.status] || u.status), u.text ? ' · ' + u.text : '', h('small', {}, ' ' + ago(u.at))))));
+        if (r.status === 'requested') {
+          const wd = h('button', { class: 'btn small danger', 'data-label': '1' }, 'Withdraw the request');
+          wd.addEventListener('click', () => confirmClick(wd, () => api('DELETE', '/website/request').then(redo, (e) => toast(e.message))));
+          sec.append(h('p', { class: 'day-hint' }, 'We’ll email you to talk it through and get your text and photos. Questions: hello@kloomie.com'), h('div', { class: 'btns' }, wd));
+        }
+      }
+      // Get one built (when nothing is under way).
+      if (!r || !WEB_STEPS.slice(0, 3).includes(r.status)) out.push(websiteAsk(x, redo));
+      if (x.staff) out.push(websiteStaff());
+      // The other cards go in order after the first.
+      let prev = sec;
+      for (const el of out.slice(1)) { prev.after(el); prev = el; }
+    }).catch((e) => { sec.innerHTML = ''; sec.append(h('h3', {}, 'Your website'), h('p', { class: 'err' }, e.message)); });
+    return out;
+  }
+  function websiteAsk(x, redo) {
+    const sec = h('section', { class: 'web-ask' }, h('h3', {}, 'Get a website built'),
+      h('p', { class: 'day-hint' }, 'We build your business a clean, fast website, and its contact form sends every lead straight into Contacts here, with your automations running on it. We run our own business on this same setup.'));
+    let pkg = '';
+    const cards = h('div', { class: 'web-pkgs', role: 'radiogroup', 'aria-label': 'Package' });
+    const pick = (k) => { pkg = k; for (const b of cards.children) { b.classList.toggle('on', b.dataset.pkg === k); b.setAttribute('aria-checked', b.dataset.pkg === k ? 'true' : 'false'); } };
+    for (const p of x.packages) cards.append(h('button', { type: 'button', class: 'web-pkg', role: 'radio', 'aria-checked': 'false', 'data-pkg': p.key, onclick: () => pick(p.key) },
+      h('b', {}, p.name), h('span', { class: 'web-price' }, webMoney(p.price), h('small', {}, ' one time')),
+      h('ul', {}, p.does.map((d) => h('li', {}, d))), h('small', {}, `Live about ${p.weeks} week${p.weeks === 1 ? '' : 's'} after we have your text and photos`)));
+    cards.append(h('button', { type: 'button', class: 'web-pkg unsure', role: 'radio', 'aria-checked': 'false', 'data-pkg': 'unsure', onclick: () => pick('unsure') }, h('b', {}, 'Not sure yet'), h('small', {}, 'Tell us what you need and we’ll suggest one')));
+    const care = h('input', { type: 'checkbox' });
+    const f = (label, el) => h('label', {}, label, el);
+    const business = h('input', { placeholder: 'e.g. Roofing in Las Vegas and Henderson', maxlength: 300 });
+    const current = h('input', { placeholder: 'If you have one', maxlength: 200 });
+    const pages = h('input', { placeholder: 'e.g. Home, Services, Reviews, Contact', maxlength: 500 });
+    const notes = h('textarea', { rows: 3, placeholder: 'Colours, sites you like, services to show off, anything else', maxlength: 3000 });
+    const phone = h('input', { type: 'tel', placeholder: 'Best number to reach you', maxlength: 40 });
+    const sendBtn = h('button', { class: 'btn primary-btn', onclick: async () => {
+      if (!pkg) return toast('Pick a package, or Not sure yet.');
+      sendBtn.disabled = true;
+      try {
+        await api('POST', '/website/request', { pkg, care: care.checked, business: business.value, current: current.value, pages: pages.value, notes: notes.value, phone: phone.value });
+        toast('Sent. We’ll be in touch by email.');
+        redo();
+      } catch (e) { toast(e.message); sendBtn.disabled = false; }
+    } }, 'Ask for my website');
+    sec.append(h('h4', {}, '1 · Pick a package'), cards,
+      h('h4', {}, '2 · Website care, if you want it'),
+      h('label', { class: 'web-care' }, care, h('span', {}, h('b', {}, `Website care · ${webMoney(x.care.price)} a month`), h('small', {}, x.care.does.join(' · ') + '. Without it, the site is set up on hosting in your name and handed over.'))),
+      h('h4', {}, '3 · Tell us about it'),
+      h('div', { class: 'row2' }, f('Your business and where you work', business), f('Your website now', current)),
+      f('Pages you want', pages), f('What you’d like', notes), f('Phone', phone),
+      h('p', { class: 'day-hint' }, 'Nothing is charged here. We’ll email you to go over it; half the build is paid to start and half at launch. Leads from the new site come into Contacts from day one.'),
+      h('div', { class: 'btns' }, sendBtn));
+    return sec;
+  }
+  // Kloomie staff only: every team's request, moved along from here.
+  function websiteStaff() {
+    const sec = h('section', { class: 'web-staff' }, h('h3', {}, 'Website requests · Kloomie staff'), h('p', { class: 'day-hint' }, 'Loading…'));
+    api('GET', '/website/staff').then(({ list, statusNames }) => {
+      sec.querySelector('.day-hint').remove();
+      if (!list.length) return sec.append(h('p', { class: 'day-hint' }, 'No requests yet.'));
+      for (const it of list) {
+        const r = it.req;
+        const st = h('select', { 'aria-label': 'Status' }, ['building', 'review', 'live'].map((k) => h('option', { value: k, selected: k === r.status }, statusNames[k])));
+        const url = h('input', { value: r.url || '', placeholder: 'The site’s address (for Live)', 'aria-label': 'Site address' });
+        const note = h('input', { placeholder: 'A note for them (optional)', 'aria-label': 'Note' });
+        const upd = h('button', { class: 'btn small', onclick: () => api('PUT', '/website/staff/' + it.wsId, { status: st.value, url: url.value, note: note.value }).then(() => { toast('Updated, and they’re told'); sec.replaceWith(websiteStaff()); }, (e) => toast(e.message)) }, 'Update');
+        const pkg = r.pkg === 'unsure' ? 'Not sure' : r.pkg[0].toUpperCase() + r.pkg.slice(1);
+        sec.append(h('div', { class: 'web-req', 'data-ws': it.wsId },
+          h('div', {}, h('b', {}, it.team), ` · ${statusNames[r.status]} · ${pkg}${r.care ? ' + care' : ''} · ${ago(r.at)}`),
+          h('small', {}, [r.byName, it.email, r.phone, r.business, r.current, r.pages].filter(Boolean).join(' · ')),
+          r.notes ? h('p', { class: 'web-notes' }, r.notes) : null,
+          h('small', {}, it.leadsOn ? '✓ Their lead capture is on (Apps → Website lead forms in their team has the snippet)' : 'Their lead capture is off'),
+          r.status === 'cancelled' || r.status === 'live' ? null : h('div', { class: 'web-req-edit' }, st, url, note, upd)));
+      }
+    }).catch((e) => { sec.querySelector('.day-hint')?.remove(); sec.append(h('p', { class: 'err' }, e.message)); });
+    return sec;
+  }
   function leadSection() {
     const sec = h('section', { class: 'lead-sec' }, h('h3', {}, 'Leads from websites, funnels & forms'));
     api('GET', '/lead-capture').then((x) => {
@@ -26897,7 +27003,7 @@
   const setPages = (admin, billing) => [
     ['You', [['profile', 'Profile & sign-in', '👤', 'Your email, password and the devices you’re signed in on.'], ['notify', 'Notifications', '🔔', 'What this device tells you, and how.'], ['prefs', 'Preferences', '🎛️', 'How Kloomie looks and works for you.'], ['signature', 'Signature', '✍️', 'Your email signature, and the one you sign documents with.']]],
     ['Team', [['members', 'Members & invites', '👥', 'Who’s on the team, their roles, and how new people join.'], ...(admin ? [['access', 'What members can use', '🔐', 'Choose what members see and use. Owners and admins always have everything.']] : []), ['roles', 'Roles', '🏷️', 'The kinds of work people do, so tasks can go to a role.'], ...(admin ? [['teamset', 'Team settings', '🛠️', 'Time zone, clean-up and messages for the whole team.']] : [])]],
-    ['Business', [['business', 'Business', '🏢', 'Your brand, Company HQ, business cards and signatures.'], ...(admin ? [['docs', 'Quotes & invoices', '🧾', 'Business details, your signature, and how quotes look and are accepted.']] : []), ...(billing ? [['billing', 'Billing', '💳', 'Your plan, seats and payment.']] : [])]],
+    ['Business', [['business', 'Business', '🏢', 'Your brand, Company HQ, business cards and signatures.'], ...(admin ? [['docs', 'Quotes & invoices', '🧾', 'Business details, your signature, and how quotes look and are accepted.']] : []), ...(admin ? [['website', 'Website', '🌐', 'Get a website built, or connect the one you have, so its leads land in Contacts.']] : []), ...(billing ? [['billing', 'Billing', '💳', 'Your plan, seats and payment.']] : [])]],
     ['Data', [['data', 'Export & delete', '🗂️', 'Take a copy of your things or the team’s, or leave and delete.']]],
   ];
   // Older names (the tabs before 2026-11-20, still in links, Help and saved on devices) → their page now.
@@ -26918,6 +27024,7 @@
     business: 'brand culture logo colour color mission values company hq business card signatures',
     docs: 'quotes invoices business details address phone license signature terms footer valid expiry prices accept',
     billing: 'billing plan seats payment card trial invoice',
+    website: 'website site web build design pages domain hosting leads form care',
     data: 'export download zip delete team account leave close',
   };
 
@@ -27181,6 +27288,7 @@
         P('teamset', h('section', {}, h('h3', {}, 'Time zone'), h('p', {}, 'What “today” means when Kloomie dates things, like follow-ups.'), tz));
       }
       P('business', W(900, () => brandSection()));
+      if (admin && page === 'website') P('website', ...websiteSection());
       if (bill) P('billing', bill);
       if (amOwner()) P('data', () => exportSection('team'));
       if (amOwner()) P('data', W(1001, h('section', { class: 'danger-sec' }, h('h3', {}, 'Delete team'),
