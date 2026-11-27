@@ -72,6 +72,16 @@ try {
   ok(await A.until(`${listText}.includes('YARDNOTE') && !${listText}.includes('YARDMSG')`), 'Files: the note, not the message');
   await A.tap(`${CHAT}.querySelector('.ch-tabs [data-ft=all]')`);
   ok(await A.until(`${listText}.includes('YARDNOTE') && ${listText}.includes('YARDMSG')`), 'All: both');
+  ok(await A.ev(`${listText}.indexOf('YARDMSG') < ${listText}.indexOf('YARDNOTE')`), 'in the order they were made (the message first), newest at the bottom');
+  // A file dropped into the conversation: in Chat, Files and All, once in each.
+  await A.tap(`${CHAT}.querySelector('.ch-tabs [data-ft=chat]')`);
+  await A.ev(`(() => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'inchat.txt', { type: 'text/plain' })); const to = ${CHAT}.querySelector('.chat-pane .list'); for (const type of ['dragenter', 'dragover', 'drop']) to.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true })); return true; })()`);
+  const once = `(${listText}.split('inchat.txt').length - 1) >= 1 && [...${CHAT}.querySelectorAll('.chat-pane .list > *')].filter((e) => e.textContent.includes('inchat.txt')).length === 1`;
+  ok(await A.until(once, 8000), 'a file dropped into Chat shows there, once');
+  await A.tap(`${CHAT}.querySelector('.ch-tabs [data-ft=files]')`);
+  ok(await A.until(once), 'in Files, once');
+  await A.tap(`${CHAT}.querySelector('.ch-tabs [data-ft=all]')`);
+  ok(await A.until(once), 'and in All, once');
   // A file dropped on Files goes into the feed's stack.
   await A.tap(`${CHAT}.querySelector('.ch-tabs [data-ft=files]')`);
   await A.ev(`(() => { const dt = new DataTransfer(); dt.items.add(new File(['hello'], 'yardfile.txt', { type: 'text/plain' })); const to = ${CHAT}.querySelector('.chat-pane .list'); for (const type of ['dragenter', 'dragover', 'drop']) to.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true })); return true; })()`);
@@ -79,7 +89,13 @@ try {
   for (let i = 0; i < 50 && !ok1; i++) { st = await rico('GET', '/state'); ok1 = st.items.some((x) => x.name === 'yardfile.txt' && x.stackId === yst?.id && !x.channelId); if (!ok1) await sleep(200); }
   ok(ok1, 'a file dropped on Files lands in the feed’s stack');
   ok(await A.until(`${listText}.includes('yardfile.txt')`), 'and shows there');
-  ok(await A.ev(`localStorage.getItem('column.feedTab:' + ${JSON.stringify(yard.id)})`) === '"files"' || await A.ev(`(localStorage.getItem('column.feedTabs') || '').includes(${JSON.stringify(yard.id)})`), 'the tab is remembered for the feed on this device');
+  ok(await A.ev(`localStorage.getItem('column.feedTab:' + ${JSON.stringify(yard.id)})`) === '"files"', 'the tab is remembered for the feed on this device');
+  await A.ev(`location.reload(); true`);
+  await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000);
+  await A.tap(`document.querySelector('#tabs [data-tab=chat]')`);
+  await A.until(`!!${CHAT}?.querySelector('.ch-row')`, 10000);
+  await A.ev(`[...${CHAT}.querySelectorAll('.ch-row')].find((r) => /yard/.test(r.textContent))?.click(); true`);
+  ok(await A.until(`!!${CHAT}?.querySelector('.ch-tabs [data-ft=files].on') && ${listText}.includes('YARDNOTE') && !${listText}.includes('YARDMSG')`), 'after a reload the feed opens on Files again');
 
   // A new job: 💬 on its row, opening its chat beside it.
   const job = await rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Porch wash', crew: samId } });
@@ -93,7 +109,7 @@ try {
   ok(await A.until(`/1/.test(${TOOL(`.jb-row[data-job="${job.id}"] .jb-chat`)}?.textContent || '')`, 8000), 'with the unread count when someone posts');
   await A.tap(TOOL(`.jb-row[data-job="${job.id}"] .jb-chat`));
   ok(await A.until(`!!${CHAT} && /porch-wash/.test(${CHAT}.querySelector('.ch-title')?.textContent || '') && ${listText}.includes('Sam says hi')`, 10000), 'tapping it opens the job’s chat');
-  ok(await A.until(`!!document.querySelector('#tool .jb-row[data-job="${job.id}"]') || !!document.querySelector('#projects .jb-card')`), 'beside the job (the Jobs tab is still there)');
+  ok(await A.until(`!!document.querySelector('#split:not(.hidden)')?.contains(${CHAT}) && !!document.querySelector('#tool .jb-row[data-job="${job.id}"]')?.offsetParent`), 'beside the job: the chat in the split, the job’s row still showing');
   ok(await A.until(`!/1/.test(${TOOL(`.jb-row[data-job="${job.id}"] .jb-chat`)}?.textContent || '')`, 6000), 'read: the count goes');
   await A.tap(TOOL(`.jb-row[data-job="${job.id}"] .jb-main`));
   ok(await A.until(`!!document.querySelector('#projects .jb-card .jb-chat')`, 10000), 'the job’s page has 💬 too');
@@ -108,11 +124,22 @@ try {
   await B.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
   await B.until(`!!document.querySelector('#tool [data-jb=jobs]')`, 10000);
   await B.ev(`document.querySelector('#tool [data-jb=jobs]').click(); true`);
+  await rico('POST', '/items', { type: 'text', text: 'JOBFILE porch', stackId: jf?.stackId });
   await B.tap(TOOL(`.jb-row[data-job="${job.id}"] .jb-chat`));
   ok(await B.until(`!!${CHAT} && /porch-wash/.test(${CHAT}.querySelector('.ch-title')?.textContent || '')`, 10000), 'Sam opens the job’s chat');
+  await B.tap(`${CHAT}.querySelector('.ch-tabs [data-ft=files]')`);
+  ok(await B.until(`${listText}.includes('JOBFILE')`), 'on its Files');
+  // A drag over it, still going when he loses the job.
+  await B.ev(`(() => { const dt = new DataTransfer(); dt.items.add(new File(['x'], 'stale.txt', { type: 'text/plain' })); window.__dt = dt; const to = ${CHAT}.querySelector('.chat-pane .list'); for (const type of ['dragenter', 'dragover']) to.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true })); return true; })()`);
   await rico('PATCH', `/records/${job.id}`, { values: { crew: null } });
   ok(await B.until(`!/porch-wash/.test(${CHAT}?.querySelector('.ch-title')?.textContent || '') && !/Sam says hi/.test(${listText})`, 10000), 'taken off the job: its chat closes for him');
   ok(await B.until(`![...document.querySelectorAll('#chat .ch-row')].some((r) => /porch-wash/.test(r.textContent))`, 8000), 'and the feed leaves his list');
+  ok(await B.ev(`!document.body.textContent.includes('JOBFILE')`), 'nothing of its Files is left on the page');
+  await B.ev(`(() => { const to = document.querySelector('#chat .chat-pane .list') || document.body; to.dispatchEvent(new DragEvent('drop', { dataTransfer: window.__dt, bubbles: true, cancelable: true })); return true; })()`);
+  await sleep(1500);
+  st = await rico('GET', '/state');
+  const stale = await rico('GET', `/jobs/${job.id}/chat`);
+  ok(!JSON.stringify(stale?.items || []).includes('stale.txt') && !st.items.some((x) => x.name === 'stale.txt' && (x.stackId === jf?.stackId || x.channelId === jf?.id)), 'the drag that was going lands nowhere in the job’s chat');
   ok(!A.errors.length && !B.errors.length, 'no errors on the page: ' + [...A.errors, ...B.errors].join(' | ').slice(0, 400));
 } catch (e) {
   ok(false, 'threw: ' + (e.stack || e));

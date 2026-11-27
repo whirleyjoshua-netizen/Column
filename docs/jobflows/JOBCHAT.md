@@ -177,8 +177,8 @@ jobs_tab_ui, member_access_ui.
    it on sets `ws.jobChatsSince = now` (each time), so jobs made while it was off don't get one afterwards (only on
    demand). Turning it off stops both the hook and the sweep; feeds already made stay.
 
-## 10. Checkpoint 2: the tests (written first; on `jobchat` before any server change: 48 of jobchat.mjs's checks and
-10 of jobchat_ui.mjs's fail, log in docs/jobflows/jobchat-checkpoint2.log)
+## 10. Checkpoint 2: the tests (written first; on `jobchat` before any server change: 64 of jobchat.mjs's checks and
+15 of jobchat_ui.mjs's fail, log in docs/jobflows/jobchat-checkpoint2.log)
 Shapes the tests fix:
 - `PATCH /workspace { jobChats }` → `workspace.jobChats` (true by default). Chat folders carry `jobs: true` / `stacks: true`.
 - A job feed in `workspace.channels`: `{ id, name, folderId, recordId, stackId, pins: [{kind:'job', id}] }`; its stack
@@ -192,3 +192,13 @@ Shapes the tests fix:
   delete the job or the feed instead).
 - In the app: `.ch-tabs [data-ft=all|chat|files]` on the feed; the tab kept in `localStorage['column.feedTab:<id>']`;
   `.jb-chat` (💬 with the unread count) on `.jb-row` and on the job page's `.jb-card`.
+
+### 10.1 Checkpoint 2 review round 1 (ChatGPT): nine more cases, now in the tests
+An automation that makes a job; Move my jobs here on a job from before; Chat off for a team feed's and a campaign's
+Files (writes, request links, renames by id), `POST /jobs/:id/chat` 403 making nothing, an admin keeping them; a member
+who can't see a job can't rename or delete its stack by id (its files stay); conflicting links left as they are after
+the migration (a stack pointing at a feed that doesn't point back, a feed pointing at another stack, a campaign feed
+pointing at another team's stack); archived items out of the owner's state too, reads following the job, a second
+finish archiving again; in the app: All's order, a file dropped into Chat once in each tab, the tab kept after a
+reload, the chat in the split beside the job's row, and a member losing the job mid-drag: nothing of its Files left on
+the page and the drop lands nowhere in it.

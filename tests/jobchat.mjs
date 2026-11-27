@@ -235,6 +235,93 @@ try {
   st = await ws();
   ok(!st.workspace.stacks.some((x) => x.id === yst?.id) && !JSON.stringify(st).includes('YARDFILE'), 'the feed deleted: its stack and files go with it');
 
+  // ---- review round 1 (checkpoint 2): more paths and edges ----
+  // An automation makes a job (a contact comes in).
+  await rico('POST', '/automations', { name: 'Lead? Make a job', trigger: { kind: 'contact.created' }, actions: [{ kind: 'create', projectId: p.id, typeId: tp.id, set: [{ field: jobF.id, value: 'Auto job for {contact}' }] }] });
+  await rico('POST', '/contacts', { name: 'Lena Lead', email: 'lena@x.test' });
+  let autoJob = null;
+  await until(async () => { const s2 = await ws(); autoJob = s2.workspace.channels.filter((c) => c.recordId && /^auto-job/.test(c.name)); return autoJob.length; }, 6000);
+  st = await ws();
+  const aj = autoJob?.[0];
+  ok(autoJob?.length === 1 && st.workspace.stacks.filter((x) => x.recordId === aj.recordId).length === 1 && st.workspace.stacks.find((x) => x.recordId === aj.recordId)?.channelId === aj.id && (aj.pins || []).some((x) => x.kind === 'job' && x.id === aj.recordId), 'a job an automation makes gets one feed, one stack, linked, the job pinned');
+  // Move my jobs here: a job from before (made while the switch was off) moved onto a flow gets its chat.
+  await rico('PATCH', '/workspace', { jobChats: false });
+  const p2 = (await rico('POST', '/projects', { template: 'trades', trades: ['cleaning'], name: 'Old board' })).body;
+  const tp2 = p2.types[0];
+  const old1 = (await rico('POST', `/projects/${p2.id}/records`, { typeId: tp2.id, values: { job: 'Old board job' } })).body;
+  await rico('PATCH', '/workspace', { jobChats: true });
+  ok(!feedOf(await ws(), old1.id), '(an older job with no chat)');
+  const f2 = (await rico('POST', '/job-flows', { name: 'Old flow', list: { projectId: p2.id, typeId: tp2.id }, steps: [{ kind: 'custom', name: 'Do it', who: { type: 'admins' }, settings: { text: 'x' } }] })).body;
+  await rico('POST', `/job-flows/${f2?.id}/publish`);
+  r = await rico('POST', '/jobs/move', { projectId: p2.id, typeId: tp2.id, flowId: f2?.id });
+  st = await ws();
+  const mf = feedOf(st, old1.id);
+  ok(r.status === 200 && mf && st.workspace.stacks.find((x) => x.id === mf.stackId)?.channelId === mf.id && (mf.pins || []).some((x) => x.kind === 'job'), 'Move my jobs here: the moved job gets its feed, stack and pin ' + (r.body?.error || ''));
+
+  // Chat off for members: plain and campaign feeds too; POST /jobs/:id/chat; stack routes by id.
+  const team = (await rico('POST', '/channels', { name: 'all hands' })).body.channels.find((c) => c.name === 'all-hands');
+  const teamSt = (await rico('POST', `/channels/${team.id}/stack`)).body?.stack;
+  await rico('POST', '/items', { type: 'text', text: 'TEAMFILE', stackId: teamSt?.id });
+  const camp2 = (await rico('POST', '/campaigns', { name: 'Fall push' })).body;
+  st = await ws();
+  const c2st = st.workspace.stacks.find((x) => x.campaignId === camp2.id);
+  await rico('POST', '/items', { type: 'text', text: 'CAMPFILE', stackId: c2st?.id });
+  await rico('PATCH', '/workspace', { jobChats: false });
+  const jSeen = await add(rico, { job: 'Sam sees no chat', crew: samId });
+  await rico('PATCH', '/workspace', { jobChats: true });
+  ss = await ws(sam);
+  ok(ss.workspace.stacks.some((x) => x.id === teamSt?.id) && ss.workspace.stacks.some((x) => x.id === c2st?.id) && JSON.stringify(ss).includes('TEAMFILE') && JSON.stringify(ss).includes('CAMPFILE'), '(control) Chat on: Sam has a team feed’s and a campaign’s Files');
+  await rico('PATCH', '/workspace', { memberAccess: { chat: false } });
+  ss = await ws(sam);
+  ok(!ss.workspace.channels.some((c) => c.id === team.id) && !ss.workspace.stacks.some((x) => x.id === teamSt?.id) && !JSON.stringify(ss).includes('TEAMFILE'), 'Chat off: a team feed and its Files are gone for him');
+  ok(!ss.workspace.stacks.some((x) => x.id === c2st?.id) && !JSON.stringify(ss).includes('CAMPFILE'), 'and a campaign’s Files');
+  for (const [nm, sid] of [['the team feed’s', teamSt?.id], ['the campaign’s', c2st?.id]]) {
+    await sam('POST', '/items', { type: 'text', text: 'OFFW ' + nm, stackId: sid });
+    ok(!(await ws()).items.some((x) => x.text === 'OFFW ' + nm && x.stackId === sid), `he can’t put a file in ${nm} stack`);
+    ok((await sam('POST', `/stacks/${sid}/request`, { days: 7 })).status === 404, `or make a request link on it`);
+    ok((await sam('PATCH', `/stacks/${sid}`, { name: 'renamed by sam' })).status === 404, `or rename it`);
+  }
+  r = await sam('POST', `/jobs/${jSeen.id}/chat`);
+  ok(r.status === 403 && !feedOf(await ws(), jSeen.id), 'POST /jobs/:id/chat for a job he sees: 403, and nothing is made');
+  const as = await ws(ada);
+  ok(as.workspace.stacks.some((x) => x.id === teamSt?.id) && as.workspace.stacks.some((x) => x.id === c2st?.id), 'an admin keeps both');
+  await rico('PATCH', '/workspace', { memberAccess: { chat: true } });
+  // A member who can't see a job can't rename or delete its stack by id (own team).
+  await rico('PATCH', '/workspace', { visibility: 'own' });
+  r = await sam('PATCH', `/stacks/${miaFeed?.stackId}`, { name: 'hacked' });
+  const r2 = await sam('DELETE', `/stacks/${miaFeed?.stackId}`);
+  st = await ws();
+  const mst = st.workspace.stacks.find((x) => x.id === miaFeed?.stackId);
+  ok(r.status === 404 && r2.status === 404 && mst && mst.name !== 'hacked' && st.items.some((x) => x.text === 'MIAFILE in the job files' && x.stackId === mst.id), 'Sam can’t rename or delete the stack of a job he can’t see; its files stay in it');
+  await rico('PATCH', '/workspace', { visibility: 'all' });
+
+  // Archived: out of everyone's state (the owner's too), items included; reads still follow the job.
+  const jArc = await add(rico, { job: 'Archive me', crew: miaId });
+  const arcFeed = feedOf(await ws(), jArc.id);
+  await rico('POST', '/items', { type: 'message', text: 'ARCMSG', channelId: arcFeed?.id });
+  await rico('POST', '/items', { type: 'text', text: 'ARCFILE', stackId: arcFeed?.stackId });
+  await rico('PATCH', `/records/${jArc.id}`, { values: { [statusF.id]: last.id } });
+  ok(await until(async () => !feedOf(await ws(), jArc.id)), '(archived at its last stage)');
+  st = await ws();
+  ok(!JSON.stringify(st).includes('ARCMSG') && !JSON.stringify(st).includes('ARCFILE') && !st.workspace.stacks.some((x) => x.id === arcFeed?.stackId), 'an archived feed’s messages, files and stack are out of the owner’s state too');
+  r = await rico('GET', `/jobs/${jArc.id}/chat`);
+  ok(JSON.stringify(r.body?.items || []).includes('ARCMSG') && JSON.stringify(r.body?.items || []).includes('ARCFILE'), 'GET /jobs/:id/chat has both');
+  await rico('PATCH', '/workspace', { visibility: 'own' });
+  ok((await sam('GET', `/jobs/${jArc.id}/chat`)).status === 404, 'own team: Sam (not on it) can’t read the archived chat');
+  const arcMsg = r.body?.items?.find((x) => x.text === 'ARCMSG');
+  ok((await sam('PATCH', `/items/${arcMsg?.id}`, { text: 'x' })).status === 404, 'or change a message in it');
+  r = await mia('GET', `/jobs/${jArc.id}/chat`);
+  ok(r.status === 200 && JSON.stringify(r.body?.items || []).includes('ARCMSG'), 'Mia (on it) can');
+  await rico('PATCH', '/workspace', { visibility: 'all' });
+  // A second finish after it was reopened archives it again; the first finish doesn't, twice.
+  await rico('POST', '/items', { type: 'message', text: 'reopen it', channelId: arcFeed?.id });
+  ok(await until(async () => !!feedOf(await ws(), jArc.id)), '(reopened by a message)');
+  await rico('PATCH', `/records/${jArc.id}`, { values: { [statusF.id]: statusF.choices[0].id } });
+  await sleep(300);
+  ok(!!feedOf(await ws(), jArc.id), 'moved back from the last stage: stays open');
+  await rico('PATCH', `/records/${jArc.id}`, { values: { [statusF.id]: last.id } });
+  ok(await until(async () => !feedOf(await ws(), jArc.id)), 'finished again: archived again (a new finish)');
+
   // ---- campaigns, standalone stacks, the migration ----
   const camp = (await rico('POST', '/campaigns', { name: 'Spring push' })).body;
   st = await ws();
@@ -246,6 +333,9 @@ try {
   const recFeed = st.workspace.channels.find((c) => c.stackId === rec?.id);
   const stacksFolder = st.workspace.chatFolders.find((f) => f.stacks);
   ok(recFeed && rec.channelId === recFeed.id && !recFeed.memberIds && stacksFolder && recFeed.folderId === stacksFolder.id, 'a stack made in Settings gets a team feed in the Stacks folder');
+  // Another team, with a stack of its own.
+  const o = (await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Olly Other', email: `olly${t}@t.test`, password: 'longenough9', device: 'Mac', deviceId: 'd9' })).body;
+  await call(o.token)('POST', '/stacks', { name: 'OTHERTEAMSTACK' });
   // Old data: unlink everything and clear the marker, as before this piece; restart twice.
   await stop();
   const db = JSON.parse(fs.readFileSync(DIR + '/db.json', 'utf8'));
@@ -254,6 +344,13 @@ try {
   w.channels.push({ id: 'oldphoto', name: 'old-photos', folderId: null }); // a feed already called that
   for (const c of w.channels) if (c.campaignId) delete c.stackId;
   for (const x of w.stacks) if (x.campaignId) delete x.channelId;
+  // Links that conflict are left as they are, never overwritten: a stack already another feed's, a feed already
+  // another stack's, and a link to a stack in another team.
+  w.stacks.push({ id: 'confstk1', name: 'Conflicted', channelId: 'oldphoto' });
+  w.channels.push({ id: 'conffeed', name: 'conf-feed', folderId: null, stackId: 'nosuchst' });
+  const other = Object.values(db.workspaces).find((x) => x.id !== w.id && x.stacks?.some((y) => y.name === 'OTHERTEAMSTACK'));
+  const camp2ch = w.channels.find((c) => c.campaignId === camp2?.id);
+  if (other && camp2ch) camp2ch.stackId = other.stacks.find((y) => y.name === 'OTHERTEAMSTACK').id;
   delete w.chatStacks;
   fs.writeFileSync(DIR + '/db.json', JSON.stringify(db));
   await start();
@@ -262,6 +359,12 @@ try {
   ok(cch2?.stackId === cst?.id && st.workspace.stacks.find((x) => x.id === cst?.id)?.channelId === cch2?.id, 'migration: a campaign’s feed and stack are linked again');
   const oldFeeds = st.workspace.channels.filter((c) => c.stackId === 'oldstk01');
   ok(oldFeeds.length === 1 && oldFeeds[0].name === 'old-photos-2', 'a standalone stack gets one team feed (a clash gets -2): ' + oldFeeds.map((c) => c.name));
+  ok(st.workspace.stacks.find((x) => x.id === 'confstk1')?.channelId === 'oldphoto' && !st.workspace.channels.some((c) => c.stackId === 'confstk1') && st.workspace.channels.find((c) => c.id === 'oldphoto')?.stackId == null, 'a stack pointing at a feed that doesn’t point back: left as it is, no new feed made for it, the feed not changed');
+  ok(st.workspace.channels.find((c) => c.id === 'conffeed')?.stackId === 'nosuchst' || st.workspace.channels.find((c) => c.id === 'conffeed')?.stackId == null, 'a feed pointing at another stack: not linked to anything else');
+  const c2now = st.workspace.channels.find((c) => c.campaignId === camp2?.id);
+  ok(c2now && !st.workspace.stacks.some((x) => x.id === c2now.stackId && x.channelId === c2now.id && x.campaignId !== camp2.id), 'a campaign feed pointing at another team’s stack: never linked to it');
+  r = await rico('GET', '/state');
+  ok(!!other && !JSON.stringify(r.body).includes('OTHERTEAMSTACK'), 'and nothing of that team’s stack comes through');
   await stop();
   await start();
   st = await ws();

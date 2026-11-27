@@ -63,10 +63,38 @@ PASS Mia (in it) does
 FAIL the feed renamed: its stack follows
 PASS asking again never swaps in another stack
 FAIL the feed deleted: its stack and files go with it
+FAIL a job an automation makes gets one feed, one stack, linked, the job pinned
+PASS (an older job with no chat)
+FAIL Move my jobs here: the moved job gets its feed, stack and pin 
+FAIL (control) Chat on: Sam has a team feed’s and a campaign’s Files
+FAIL Chat off: a team feed and its Files are gone for him
+FAIL and a campaign’s Files
+PASS he can’t put a file in the team feed’s stack
+PASS or make a request link on it
+PASS or rename it
+FAIL he can’t put a file in the campaign’s stack
+FAIL or make a request link on it
+FAIL or rename it
+FAIL POST /jobs/:id/chat for a job he sees: 403, and nothing is made
+FAIL an admin keeps both
+FAIL Sam can’t rename or delete the stack of a job he can’t see; its files stay in it
+PASS (archived at its last stage)
+FAIL an archived feed’s messages, files and stack are out of the owner’s state too
+FAIL GET /jobs/:id/chat has both
+PASS own team: Sam (not on it) can’t read the archived chat
+PASS or change a message in it
+FAIL Mia (on it) can
+FAIL (reopened by a message)
+FAIL moved back from the last stage: stays open
+PASS finished again: archived again (a new finish)
 FAIL a new campaign’s feed and stack are linked
 FAIL a stack made in Settings gets a team feed in the Stacks folder
 FAIL migration: a campaign’s feed and stack are linked again
 FAIL a standalone stack gets one team feed (a clash gets -2): 
+PASS a stack pointing at a feed that doesn’t point back: left as it is, no new feed made for it, the feed not changed
+PASS a feed pointing at another stack: not linked to anything else
+PASS a campaign feed pointing at another team’s stack: never linked to it
+PASS and nothing of that team’s stack comes through
 FAIL a second restart makes no more
 FAIL and no second feed for a job
 Data: /Users/premiershades/column-jobflows/dk/jobchat/db.json
@@ -79,22 +107,30 @@ Data: /Users/premiershades/column-jobflows/dk/jobchat/db.json
   Data stored in /Users/premiershades/column-jobflows/dk/jobchat
 
 
-jobchat: 48 failed
+jobchat: 64 failed
 FAIL a feed has All / Chat / Files tabs
 PASS Chat: the message, not the note in its Files
 FAIL Files: the note, not the message
 FAIL All: both
+FAIL in the order they were made (the message first), newest at the bottom
+PASS a file dropped into Chat shows there, once
+PASS in Files, once
+PASS and in All, once
 FAIL a file dropped on Files lands in the feed’s stack
 PASS and shows there
 FAIL the tab is remembered for the feed on this device
+FAIL after a reload the feed opens on Files again
 FAIL the new job’s row has 💬
 FAIL with the unread count when someone posts
 FAIL tapping it opens the job’s chat
-PASS beside the job (the Jobs tab is still there)
+FAIL beside the job: the chat in the split, the job’s row still showing
 PASS read: the count goes
 FAIL the job’s page has 💬 too
 FAIL Sam opens the job’s chat
-PASS taken off the job: its chat closes for him
-PASS and the feed leaves his list
-PASS no errors on the page: 
-jobchat_ui: 10 failed
+FAIL on its Files
+FAIL threw: Error: TypeError: Cannot read properties of null (reading 'querySelector')
+    at <anonymous>:1:185
+    at <anonymous>:1:375
+    at Object.ev (file:///Users/premiershades/column-jobflows/tests/jobchat_ui.mjs:28:193)
+    at async file:///Users/premiershades/column-jobflows/tests/jobchat_ui.mjs:133:3
+jobchat_ui: 15 failed
