@@ -2997,7 +2997,8 @@ function broadcast(wsId, msg) {
   }
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
   const task = msg.task?.id && db.tasks[msg.task.id];
-  const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid, db.workspaces[wsId]) && (!boundSt || seesStack(boundSt, mid, db.workspaces[wsId])) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
+  const isMsg = msg.item && db.items[msg.item.id]?.type === 'message';
+  const sees = (mid) => !(isMsg && chatOffFor(db.workspaces[wsId], mid)) && seesCampaign(campaignId, mid) && seesFeed(feed, mid, db.workspaces[wsId]) && (!boundSt || seesStack(boundSt, mid, db.workspaces[wsId])) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
   const live = (s) => s.readyState === 1 && (!s.meta.token || db.tokens[s.meta.token]) && db.workspaces[wsId]?.members.some((x) => x.id === s.meta.memberId);
   for (const s of set) if (!live(s) && s.readyState === 1) s.close(4001, 'Signed out');
   for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(pricedData && PJ.seesPrices(wsId, s.meta.memberId) ? pricedData : data);
@@ -6340,11 +6341,22 @@ function jobChatEnsure(ws, rec) {
   const sid = JF.ensureStack(ws, rec).id;
   const st = ws.stacks.find((x) => x.id === sid);
   let ch = ws.channels.find((c) => c.recordId === rec.id);
+  let made = false;
   if (!ch) {
     ch = { id: rid(8), name: feedNameFor(ws, PJ.recName(db.projects[rec.projectId], rec)), folderId: chatFolderFor(ws, 'jobs', 'Jobs').id, recordId: rec.id, pins: [{ pid: rid(8), kind: 'job', id: rec.id, by: null, at: Date.now() }] };
     ws.channels.push(ch);
+    made = true;
   }
   if (!ch.stackId && st) linkFeedStack(ws, ch, st);
+  // Both ways, or nothing (§8.2, §8.3): a job stack already bound to another feed, or a feed naming a stack that
+  // doesn't name it back, is left as it is; a feed made just now goes again, so no half-made chat is left.
+  if (!st || ch.stackId !== st.id || st.channelId !== ch.id) {
+    if (made) ws.channels = ws.channels.filter((c) => c !== ch);
+    if (!rec.chatBroken) console.error(`A job's chat couldn't be linked to its files (job ${rec.id}): left as it is.`);
+    rec.chatBroken = true; // the safety net doesn't try it again every minute
+    return null;
+  }
+  delete rec.chatBroken;
   rec.chatId = ch.id;
   save();
   broadcast(ws.id, { type: 'workspace' });
@@ -6410,7 +6422,7 @@ function jobChatFollow(rec) {
 // one. A future path that forgets the hook is caught within a minute.
 function jobChatsNet() {
   for (const rec of Object.values(db.records)) {
-    if (rec.chatId) continue;
+    if (rec.chatId || rec.chatBroken) continue;
     const ws = db.workspaces[rec.wsId];
     if (!ws || !jobChatsOn(ws) || !(rec.createdAt >= (ws.jobChatsSince || Infinity))) continue;
     if (JF.isJobRecord(rec)) jobChatEnsure(ws, rec);

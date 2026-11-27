@@ -299,6 +299,10 @@ try {
   }
   r = await sam('POST', `/jobs/${jSeen.id}/chat`);
   ok(r.status === 403 && !feedOf(await ws(), jSeen.id), 'POST /jobs/:id/chat for a job he sees: 403, and nothing is made');
+  const ear2 = listen(samTok); await ear2.ready;
+  await rico('POST', '/items', { type: 'message', text: 'GENERALOFF hello team' });
+  await sleep(400);
+  ok(!JSON.stringify(ear2.heard).includes('GENERALOFF'), 'a new #general message doesn’t reach him live either (as his state)');
   const as = await ws(ada);
   ok(as.workspace.stacks.some((x) => x.id === teamSt?.id) && as.workspace.stacks.some((x) => x.id === c2st?.id), 'an admin keeps both');
   await rico('PATCH', '/workspace', { memberAccess: { chat: true } });
@@ -359,6 +363,11 @@ try {
   const recFeed = st.workspace.channels.find((c) => c.stackId === rec?.id);
   const stacksFolder = st.workspace.chatFolders.find((f) => f.stacks);
   ok(recFeed && rec.channelId === recFeed.id && !recFeed.memberIds && stacksFolder && recFeed.folderId === stacksFolder.id, 'a stack made in Settings gets a team feed in the Stacks folder');
+  // A job whose stack is already bound to another feed (written in below): its chat can't be made.
+  await rico('PATCH', '/workspace', { jobChats: false });
+  const jConf = await add(rico, { job: 'Conflict job' });
+  const confSt = (await rico('POST', `/jobs/${jConf.id}/stack`)).body?.stack;
+  await rico('PATCH', '/workspace', { jobChats: true });
   // Another team, with a stack of its own.
   const o = (await call()('POST', '/auth', { mode: 'create', workspace: 'Other ' + t, name: 'Olly Other', email: `olly${t}@t.test`, password: 'longenough9', device: 'Mac', deviceId: 'd9' })).body;
   await call(o.token)('POST', '/stacks', { name: 'OTHERTEAMSTACK' });
@@ -373,6 +382,8 @@ try {
   // Links that conflict are left as they are, never overwritten: a stack already another feed's, a feed already
   // another stack's, and a link to a stack in another team.
   w.stacks.push({ id: 'confstk1', name: 'Conflicted', channelId: 'oldphoto' });
+  const cs = w.stacks.find((x) => x.id === confSt?.id);
+  if (cs) cs.channelId = 'oldphoto';
   w.channels.push({ id: 'conffeed', name: 'conf-feed', folderId: null, stackId: 'nosuchst' });
   const other = Object.values(db.workspaces).find((x) => x.id !== w.id && x.stacks?.some((y) => y.name === 'OTHERTEAMSTACK'));
   const camp2ch = w.channels.find((c) => c.campaignId === camp2?.id);
@@ -395,6 +406,11 @@ try {
   await start();
   st = await ws();
   ok(st.workspace.channels.filter((c) => c.stackId === 'oldstk01').length === 1 && st.workspace.channels.filter((c) => c.stackId === rec?.id).length === 1, 'a second restart makes no more');
+  r = await rico('POST', `/jobs/${jConf.id}/chat`);
+  st = await ws();
+  ok(r.status === 409 && !st.workspace.channels.some((c) => c.recordId === jConf.id), 'a job whose stack is bound to another feed: its chat isn’t made (409), nothing half-made');
+  r = await rico('GET', '/state');
+  ok(!(r.body.workspace.stacks.find((x) => x.id === confSt?.id)?.channelId && r.body.workspace.stacks.find((x) => x.id === confSt?.id)?.channelId !== 'oldphoto'), 'and its stack still names the feed it named');
   ok(st.workspace.channels.filter((c) => c.recordId === jBoard.id).length === 1, 'and no second feed for a job: ' + st.workspace.channels.filter((c) => c.recordId === jBoard.id).length);
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e));

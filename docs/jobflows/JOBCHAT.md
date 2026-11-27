@@ -239,3 +239,8 @@ someone on the job, nothing for a member who isn't). §8.9 corrected: the app's 
   deleting a feed deletes its stack and its files; making a stack feed invite-only drops `team` (narrower only).
 - jobflow_links.mjs turns `jobChats` off (its jobs start without a stack, Phase 4's rule); jobchat.mjs is in ci.sh.
   ci.sh passes; jobchat.mjs passes.
+- Checkpoint 3 review round 1 (ChatGPT): `jobChatEnsure` now checks the link both ways before it sets `rec.chatId` or
+  answers; a job stack already bound to another feed (or a feed naming a stack that doesn't name it back) is left as it
+  is, a feed made just then is taken back, `POST /jobs/:id/chat` answers 409, and the safety net doesn't retry it
+  (`rec.chatBroken`, kept out of the record sent to the app). A message reaches nobody with Chat off for members live
+  either (the broadcast checks `chatOffFor` for any message, as state does), #general included. Tests for both.

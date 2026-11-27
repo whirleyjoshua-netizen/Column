@@ -1135,7 +1135,7 @@ export function jobFlowsModule(ctx) {
       // then the member Chat switch (403). POST makes it if it isn't there yet (one turn); GET has it, archived or not.
       if (c === 'chat' && !d && (m === 'GET' || m === 'POST')) {
         if (!memberMay(ws, auth, 'chat')) return send(res, 403, { error: 'Chat is off for members.' });
-        if (m === 'POST') return send(res, 200, { feed: ctx.jobChat.ensure(ws, rec) });
+        if (m === 'POST') { const feed = ctx.jobChat.ensure(ws, rec); return feed ? send(res, 200, { feed }) : send(res, 409, { error: 'This job’s chat and files are linked to something else. Ask an owner to look.' }); }
         return send(res, 200, ctx.jobChat.get(ws, auth, rec));
       }
       if (c === 'stack' && m === 'POST' && !d) {

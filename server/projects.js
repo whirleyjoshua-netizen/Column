@@ -512,7 +512,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     const { share, answer, ...rest } = rec;
     return { ...rest, values: redactValues(p, t, rec.values || {}, view).values, log: (rec.log || []).map((e) => redactEntry(p, t, e)), ...(answer ? { answer: { act: answer.act, name: answer.name, reason: answer.reason, at: answer.at, method: answer.method } } : {}) };
   }
-  const publicRecord = ({ wsId, log, secrets, flowStage, stages, ...r }, view = null) => {
+  const publicRecord = ({ wsId, log, secrets, flowStage, stages, chatBroken, ...r }, view = null) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
     if (p && t && t.fields.some((f) => CALC.has(f.type))) r = { ...r, values: { ...r.values, ...calcValues(p, t, { ...r, wsId }) } };
