@@ -7,9 +7,14 @@ import path from 'node:path';
 const B = process.env.B || 'http://127.0.0.1:4797';
 const OUTBOX = process.env.OUTBOX || (process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'outbox') : '');
 const call = (tok) => async (m, p, body) => {
-  const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: body ? JSON.stringify(body) : undefined });
-  const ct = r.headers.get('content-type') || '';
-  return { status: r.status, headers: r.headers, body: ct.includes('json') ? await r.json() : Buffer.from(await r.arrayBuffer()) };
+  const go = async (b) => {
+    const r = await fetch(B + '/api' + p, { method: m, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok }, body: b ? JSON.stringify(b) : undefined });
+    const ct = r.headers.get('content-type') || '';
+    return { status: r.status, headers: r.headers, body: ct.includes('json') ? await r.json() : Buffer.from(await r.arrayBuffer()) };
+  };
+  const r = await go(body);
+  // An email to a customer asks first (docs/jobflows/PHASE3B.md §1): here the person presses Send on the preview.
+  return r.status === 428 && r.body?.confirm ? go({ ...(body || {}), confirm: r.body.confirm }) : r;
 };
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };

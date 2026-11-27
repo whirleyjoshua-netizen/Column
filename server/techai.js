@@ -60,7 +60,7 @@ export function techAiModule({ db, save, cleanText, readJson, send, aiAsk, reply
           items.push(PJ.createRecord(ws, p, work, auth, v));
         }
         save();
-        return send(res, 200, { feature: PJ.publicRecord(feature), items: items.map(PJ.publicRecord) });
+        return send(res, 200, { feature: PJ.publicRecord(feature, PJ.viewOf(ws.id, auth.memberId)), items: items.map((r) => PJ.publicRecord(r, PJ.viewOf(ws.id, auth.memberId))) });
       }
       const idea = cleanText(body.idea, 4000);
       if (!idea) return send(res, 400, { error: 'Describe the idea first.' });
@@ -101,7 +101,7 @@ Reply with JSON only: {"feature":{"title":"","why":"what and why, 2-4 sentences"
           made.push(PJ.createRecord(ws, p, tests, auth, v));
         }
         save();
-        return send(res, 200, { tests: made.map(PJ.publicRecord) });
+        return send(res, 200, { tests: made.map((r) => PJ.publicRecord(r, PJ.viewOf(ws.id, auth.memberId))) });
       }
       const items = Object.values(db.records).filter((r) => r.projectId === p.id && r.typeId === work.id && (r.values[k(work, 'feature')?.id] || []).includes(rec.id));
       const acc = (r) => (r.values[k(work, 'acceptance')?.id]?.items || []).map((x) => x.text);

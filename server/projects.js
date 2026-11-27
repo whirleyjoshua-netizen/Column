@@ -343,7 +343,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '' }) {
+export function projectsModule({ jobQuote = () => null, seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '', docsOf = null, bizHtml = () => '', inkedPng = () => null }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -367,10 +367,85 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
   // call the customer and find the place, even if they can't open Contacts.
   // What's in a locked field (rec.secrets) never goes out with a record: only that one is set ({ set, at } in values).
   // The job an item is at goes out with its name and project, when that project isn't private.
-  const publicRecord = ({ wsId, log, secrets, flowStage, stages, ...r }) => {
+  // Prices (docs/jobflows/PRICES.md): owners and admins see them, by their role now; members never do, on any path.
+  // A price is a price line (items), a Price list's money, or a formula or rollup that reads one (past calc's 8
+  // levels it counts as one too). Redaction happens only on what goes out: stored values and calc are untouched.
+  const seesPrices = (wsId, memberId) => ['owner', 'admin'].includes(db.workspaces[wsId]?.members.find((m) => m.id === memberId)?.role);
+  const FULL = { prices: true };
+  const viewOf = (wsId, memberId) => (seesPrices(wsId, memberId) ? { prices: true } : null);
+  function isPriced(p, t, f, depth = 0) {
+    if (!f || !t) return false;
+    if (depth > 8) return true;
+    if (f.type === 'items') return true;
+    if (f.type === 'money') return t.key === 'price_list';
+    if (f.type === 'formula') {
+      let ids;
+      try { ids = FX.refs(treeOf(f)); } catch { return true; }
+      for (const id of ids) if (isPriced(p, t, fieldOf(t, id), depth + 1)) return true;
+      return false;
+    }
+    if (f.type === 'rollup') {
+      if (f.fn === 'count' || f.fn === 'checked') return false;
+      const lf = fieldOf(t, f.via);
+      const to = lf?.type === 'link' && typeOf(p, lf.target);
+      return !!to && isPriced(p, to, fieldOf(to, f.of), depth + 1);
+    }
+    return false;
+  }
+  const pricedIds = (p, t) => (p && t ? t.fields.filter((f) => isPriced(p, t, f)).map((f) => f.id) : []);
+  // A copy of the values without prices: price lines keep what and how many; anything else priced is null and named
+  // in hidden. With view.prices, the values as they are.
+  function redactValues(p, t, values, view) {
+    if (view?.prices) return { values, hidden: [] };
+    const ids = pricedIds(p, t);
+    if (!ids.length) return { values, hidden: [] };
+    const out = { ...values }, hidden = [];
+    for (const id of ids) {
+      const f = fieldOf(t, id);
+      if (f.type === 'items') { const x = values[id]; if (x != null) out[id] = { rows: (Array.isArray(x.rows) ? x.rows : []).map((r) => ({ id: r.id, desc: r.desc ?? '', qty: r.qty, unit: r.unit ?? '' })), hidden: true }; }
+      else { out[id] = null; hidden.push(id); }
+    }
+    return { values: out, hidden };
+  }
+  // A timeline entry as this reader may see it: a change to a price reads "changed". An entry is shown in full only
+  // when it's positively not a price: its fieldId is a field that isn't priced, or (older entries, no fieldId) its
+  // field name matches exactly one field of the list and that one isn't priced.
+  function redactEntry(p, t, e) {
+    if (e.kind !== 'change' && e.kind !== 'move') return e;
+    let f = null;
+    if (e.fieldId) f = t && fieldOf(t, e.fieldId);
+    else if (t && e.field) { const m = t.fields.filter((x) => x.name === e.field); f = m.length === 1 ? m[0] : null; }
+    if (f && !isPriced(p, t, f)) return e;
+    return { ...e, from: '', to: 'changed' };
+  }
+  // A write that sets or changes a price, by someone who doesn't see prices: the field's name (the write is refused
+  // whole), else null. Sending a price field empty when it's empty is not a change.
+  const blank = (v) => v == null || v === '' || (typeof v === 'object' && Array.isArray(v.rows) && !v.rows.length);
+  function pricedWrite(wsId, memberId, p, t, values, rec = null) {
+    if (!values || typeof values !== 'object' || seesPrices(wsId, memberId)) return null;
+    for (const [k, v] of Object.entries(values)) {
+      const f = fieldOf(t, k);
+      if (f && isPriced(p, t, f) && !(blank(v) && blank(rec?.values[f.id]))) return f.name;
+    }
+    return null;
+  }
+  const PRICES_403 = { error: 'Prices are for owners and admins.' };
+  // A stored record as a member's export holds it: the same redaction as publicRecord, the timeline included.
+  function rawFor(rec, view) {
+    if (view?.prices) return rec;
+    const p = db.projects[rec.projectId], t = p && typeOf(p, rec.typeId);
+    const { share, answer, ...rest } = rec;
+    return { ...rest, values: redactValues(p, t, rec.values || {}, view).values, log: (rec.log || []).map((e) => redactEntry(p, t, e)), ...(answer ? { answer: { act: answer.act, name: answer.name, reason: answer.reason, at: answer.at, method: answer.method } } : {}) };
+  }
+  const publicRecord = ({ wsId, log, secrets, flowStage, stages, ...r }, view = null) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
     if (p && t && t.fields.some((f) => CALC.has(f.type))) r = { ...r, values: { ...r.values, ...calcValues(p, t, { ...r, wsId }) } };
+    if (!view?.prices) {
+      const { values, hidden } = redactValues(p, t, r.values, view);
+      const { share, answer, ...rest } = r;
+      r = { ...rest, values, ...(hidden.length ? { hiddenFields: hidden } : {}), ...(answer ? { answer: { act: answer.act, name: answer.name, reason: answer.reason, at: answer.at, method: answer.method } } : {}) };
+    }
     const jobIds = (t?.fields || []).filter((f) => f.type === 'job' && r.values[f.id]).map((f) => r.values[f.id]);
     if (jobIds.length) {
       const jobs = {};
@@ -549,15 +624,21 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
   // A record's timeline as one person may read it: a line about a task or a logged call they can't see (a private
   // campaign's) is left out, and so is one whose task or call is gone, since whose it was can't be told. On every path:
   // the route, what's sent live, the public API and recordStory.
-  const logFor = (rec, memberId) => (rec.log || []).filter((e) => (!e.taskId || (db.tasks[e.taskId] && seesLinked('task', db.tasks[e.taskId], memberId))) && (!e.attemptId || (db.attempts[e.attemptId] && seesLinked('attempt', db.attempts[e.attemptId], memberId))));
+  const logFor = (rec, memberId) => {
+    const out = (rec.log || []).filter((e) => (!e.taskId || (db.tasks[e.taskId] && seesLinked('task', db.tasks[e.taskId], memberId))) && (!e.attemptId || (db.attempts[e.attemptId] && seesLinked('attempt', db.attempts[e.attemptId], memberId))));
+    if (seesPrices(rec.wsId, memberId)) return out;
+    const p = db.projects[rec.projectId], t = p && typeOf(p, rec.typeId);
+    return out.map((e) => redactEntry(p, t, e));
+  };
   // Live, each person who sees the project gets their own copy.
   function logNews(rec) {
     const ws = db.workspaces[rec.wsId];
     for (const mb of ws?.members || []) broadcast(rec.wsId, { type: 'record:log', recordId: rec.id, projectId: rec.projectId, log: logFor(rec, mb.id).slice(0, 50), forMember: mb.id });
   }
   // A value as words, for the timeline.
-  function words(ws, p, f, v) {
+  function words(ws, p, f, v, view = null) {
     if (v == null || v === '') return '';
+    if (!view?.prices) { const t = p?.types.find((x) => x.fields.includes(f)); if (t && isPriced(p, t, f)) return f.type === 'items' ? `${v.rows?.length || 0} line${v.rows?.length === 1 ? '' : 's'}` : 'hidden'; }
     if (f.type === 'money') return '$' + (v / 100).toLocaleString('en-US', { minimumFractionDigits: v % 100 ? 2 : 0 });
     if (f.type === 'select') return f.choices.find((c) => c.id === v)?.label || '';
     if (f.type === 'multi') return v.map((id) => f.choices.find((c) => c.id === id)?.label).filter(Boolean).join(', ');
@@ -602,12 +683,12 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
       const a = JSON.stringify(before[f.id] ?? null), b = JSON.stringify(rec.values[f.id] ?? null);
       if (a === b) continue;
       // A locked field: only that it changed, never what it was or is.
-      if (f.type === 'secret') { logTo(rec, { kind: 'change', field: f.name, from: '', to: rec.values[f.id] ? 'a new one (hidden)' : 'cleared', by, ...more }); continue; }
-      const from = words(ws, p, f, before[f.id]), to = words(ws, p, f, rec.values[f.id]);
+      if (f.type === 'secret') { logTo(rec, { kind: 'change', field: f.name, fieldId: f.id, from: '', to: rec.values[f.id] ? 'a new one (hidden)' : 'cleared', by, ...more }); continue; }
+      const from = words(ws, p, f, before[f.id], FULL), to = words(ws, p, f, rec.values[f.id], FULL);
       // A move: each one kept (not merged with the last), with the spot, for where the item has been.
       const loc = f.type === 'location' && rec.values[f.id];
-      if (loc && (from !== to || loc.lat !== before[f.id]?.lat || loc.lng !== before[f.id]?.lng)) logTo(rec, { kind: 'move', field: f.name, from, to, by, ...more, ...(Number.isFinite(loc.lat) ? { lat: loc.lat, lng: loc.lng } : {}) });
-      else if (from !== to) logTo(rec, { kind: 'change', field: f.name, from, to, by, ...more });
+      if (loc && (from !== to || loc.lat !== before[f.id]?.lat || loc.lng !== before[f.id]?.lng)) logTo(rec, { kind: 'move', field: f.name, fieldId: f.id, from, to, by, ...more, ...(Number.isFinite(loc.lat) ? { lat: loc.lat, lng: loc.lng } : {}) });
+      else if (from !== to) logTo(rec, { kind: 'change', field: f.name, fieldId: f.id, from, to, by, ...more });
     }
   }
   // Activity from elsewhere: a call logged from a campaign's list, a task made or done.
@@ -996,8 +1077,9 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
             ...(Number.isFinite(cost) ? { cost: Math.max(0, Math.min(1e10, cost)) } : {}),
             ...(r?.taxable === false ? { taxable: false } : {}),
             // Where its price came from (Finance step 3): a price list item on any of the team's boards, or an
-            // Inventory item ('inv:<id>'). The line keeps the price it was given; the source can change later.
-            ...(typeof r?.from === 'string' && (db.records[r.from]?.wsId === p.wsId || (r.from.startsWith('inv:') && db.invItems?.[r.from.slice(4)]?.wsId === p.wsId)) ? { from: r.from } : {}),
+            // Inventory item ('inv:<id>'), or one of the business's Items ('item:<id>', Job Flows). The line keeps the
+            // price it was given; the source can change later.
+            ...(typeof r?.from === 'string' && (db.records[r.from]?.wsId === p.wsId || (r.from.startsWith('inv:') && db.invItems?.[r.from.slice(4)]?.wsId === p.wsId) || (r.from.startsWith('item:') && db.jobItems?.[r.from.slice(5)]?.wsId === p.wsId)) ? { from: r.from } : {}),
           };
         }).filter((r) => r.desc || r.price);
         const tax = Number(v.taxRate ?? v.tax_rate ?? 0);
@@ -1198,13 +1280,17 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
   function newRecord(ws, p, t, auth, values, extId, opts) {
     if (teamRecords(ws.id) >= MAX_RECORDS) throw bad(`A team can keep ${MAX_RECORDS.toLocaleString()} records. Delete some first.`);
     const rec = { id: rid(), wsId: ws.id, projectId: p.id, typeId: t.id, values: {}, extId: extId ? cleanText(extId, 200) : null, by: auth.member, memberId: auth.memberId, createdAt: Date.now(), updatedAt: Date.now(), ...(t.scan ? { tag: newTag() } : {}) };
-    for (const f of t.fields) if (f.type === 'autonumber') rec.values[f.id] = `${f.prefix || ''}${(f.next = (f.next || 1) + 1) - 1}`;
+    // Its number is taken only once the record is kept (below), so a record that fails to be made uses none up.
+    const numbered = t.fields.filter((f) => f.type === 'autonumber');
+    for (const f of numbered) rec.values[f.id] = `${f.prefix || ''}${f.next || 1}`;
     for (const f of t.fields) if (f.default && f.choices?.some((c) => c.id === f.default)) rec.values[f.id] = f.default;
     // A new job starts with its trade's checklist to tick, and the readings it takes, ready to fill in.
     for (const f of t.fields) if (f.type === 'checklist' && f.list?.length) rec.values[f.id] = { items: f.list.map((text) => ({ id: rid(6), text, done: false })) };
     for (const f of t.fields) if (f.type === 'readings' && f.list?.length) rec.values[f.id] = { rows: f.list.map((x) => { const m = /^(.*?)\s+([^\s]*[%°]\w*|psi|ppm|gpm|gpg|A|V|Hz|CFM50|pCi\/L)$/.exec(x); return { id: rid(6), label: m ? m[1] : x, value: '', unit: m ? m[2] : '' }; }) };
-    if (t.fields.some((f) => f.type === 'autonumber')) projectNews(p);
     applyValues(ws, p, t, rec, values, opts);
+    opts?.before?.(rec); // a caller's own part, built against the record before it's kept (a throw keeps nothing)
+    for (const f of numbered) f.next = (f.next || 1) + 1;
+    if (numbered.length) projectNews(p);
     db.records[rec.id] = rec;
     rec.log = [{ id: rid(6), at: rec.createdAt, kind: 'created', by: auth.member }];
     return rec;
@@ -1247,7 +1333,8 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
         if (isProfile(p) && t === profileList(p)) throw bad('Insurance & licenses is part of the workspace profile: it can’t be removed.');
         if (p.types.length === 1) throw bad('A project needs at least one list.');
         p.types = p.types.filter((x) => x !== t);
-        for (const r of Object.values(db.records)) if (r.projectId === p.id && r.typeId === t.id) delete db.records[r.id];
+        // Each record goes as a deleted one does: its runs, visits, draft invoices and job stack too.
+        for (const r of Object.values(db.records)) if (r.projectId === p.id && r.typeId === t.id) { delete db.records[r.id]; onRecordGone?.(r); }
         // Link fields pointing at it go.
         for (const o of p.types) o.fields = o.fields.filter((f) => !(f.type === 'link' && f.target === t.id));
         return null;
@@ -1400,7 +1487,7 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
         const p = db.projects[r.projectId];
         if (!p || !sees(p, auth.memberId)) continue;
         const t = typeOf(p, r.typeId);
-        if (t?.fields.some((f) => f.type === 'contact' && r.values[f.id] === c)) out.push({ ...publicRecord(r), project: p.name, list: t.singular || t.name, icon: t.icon || '' });
+        if (t?.fields.some((f) => f.type === 'contact' && r.values[f.id] === c)) out.push({ ...publicRecord(r, viewOf(ws.id, auth.memberId)), project: p.name, list: t.singular || t.name, icon: t.icon || '' });
       }
       return send(res, 200, out.sort((x, y) => y.createdAt - x.createdAt).slice(0, 100));
     }
@@ -1421,7 +1508,7 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
       const had = Object.values(db.projects).some((x) => x.wsId === ws.id && isProfile(x));
       const p = profileOf(ws);
       if (!had) { save(); broadcast(ws.id, { type: 'project', project: publicProject(p) }); }
-      return send(res, 200, { project: publicProject(p), records: Object.values(db.records).filter((r) => r.projectId === p.id).map(publicRecord) });
+      return send(res, 200, { project: publicProject(p), records: Object.values(db.records).filter((r) => r.projectId === p.id).map((r) => publicRecord(r, viewOf(ws.id, auth.memberId))) });
     }
     if (a === 'projects') {
       if (m === 'GET' && !b) return send(res, 200, Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject));
@@ -1442,7 +1529,7 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
       }
       const p = b && db.projects[b];
       if (!p || p.wsId !== ws.id || !sees(p, auth.memberId)) return send(res, 404, { error: 'That project is gone.' });
-      if (m === 'GET' && c === 'records') return send(res, 200, Object.values(db.records).filter((r) => r.projectId === p.id).map(publicRecord));
+      if (m === 'GET' && c === 'records') return send(res, 200, Object.values(db.records).filter((r) => r.projectId === p.id).map((r) => publicRecord(r, viewOf(ws.id, auth.memberId))));
       // A new test run: tests (all, or one release's) back to Not run.
       if (m === 'POST' && c === 'test-run') {
         const body = await readJson(req);
@@ -1495,11 +1582,12 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
         const body = await readJson(req, 200_000);
         const t = typeOf(p, body.typeId);
         if (!t) return send(res, 400, { error: 'Pick which list it goes in.' });
+        if (pricedWrite(ws.id, auth.memberId, p, t, body.values)) return send(res, 403, PRICES_403);
         const held = holdDiscount(ws, auth, p, t, null, body.values, req, body);
         if (held) return send(res, held.status, held.body);
         const rec = newRecord(ws, p, t, auth, body.values, body.extId, { addChoices: false });
         recordNews(rec, 'record.created', auth.member);
-        return send(res, 200, publicRecord(rec));
+        return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
       }
       // Rows from a spreadsheet: each matched to a record by external id or a field (email, say), else added.
       if (m === 'POST' && c === 'import') {
@@ -1507,6 +1595,7 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
         const t = typeOf(p, body.typeId);
         if (!t) return send(res, 400, { error: 'Pick which list to import into.' });
         const rows = Array.isArray(body.rows) ? body.rows.slice(0, 20_000) : [];
+        if (rows.some((row) => pricedWrite(ws.id, auth.memberId, p, t, row))) return send(res, 403, PRICES_403);
         const match = body.match && fieldOf(t, body.match);
         let added = 0, updated = 0;
         const skipped = [];
@@ -1569,7 +1658,7 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
         const n = Object.values(db.records).filter((r) => r.projectId === p.id).length;
         const held = n ? hold?.(ws, auth, 'deleteRecord', { summary: `Delete the project ${p.name} and its ${n} record${n === 1 ? '' : 's'}`, target: { projectId: p.id }, req: { method: 'DELETE', path: req.url, body: null } }) : null;
         if (held) return send(res, held.status, held.body);
-        for (const r of Object.values(db.records)) if (r.projectId === p.id) delete db.records[r.id];
+        for (const r of Object.values(db.records)) if (r.projectId === p.id) { delete db.records[r.id]; onRecordGone?.(r); }
         delete db.projects[p.id];
         for (const h of Object.values(db.webhooks)) if (h.projectId === p.id) delete db.webhooks[h.id];
         save();
@@ -1661,10 +1750,11 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
           recordNews(rec, 'record.updated', auth.member);
         }
         save();
-        return send(res, 200, { moved: left.length, next: next ? publicRecord(next) : null });
+        return send(res, 200, { moved: left.length, next: next ? publicRecord(next, viewOf(ws.id, auth.memberId)) : null });
       }
       if (m === 'PATCH' && !c) {
         const body = await readJson(req, 200_000);
+        if (pricedWrite(ws.id, auth.memberId, p, t, body.values, rec)) return send(res, 403, PRICES_403);
         const held = holdDiscount(ws, auth, p, t, rec, body.values, req, body);
         if (held) return send(res, held.status, held.body);
         const before = { ...rec.values };
@@ -1681,7 +1771,7 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
         if (body.docId !== undefined) rec.docId = db.items[body.docId]?.wsId === ws.id && db.items[body.docId].type === 'text' && canSeeItem(auth, db.items[body.docId]) ? body.docId : null;
         rec.updatedAt = Date.now();
         recordNews(rec, 'record.updated', auth.member);
-        return send(res, 200, publicRecord(rec));
+        return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
       }
       if (m === 'DELETE' && !c) {
         const held = hold?.(ws, auth, 'deleteRecord', { summary: `Delete ${recName(p, rec)}`, target: { projectId: p.id, recordId: rec.id }, req: { method: 'DELETE', path: req.url, body: null } });
@@ -1715,20 +1805,19 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
       }
       // Sending a quote: a link of its own for the customer. Making it marks a draft as sent.
       if (c === 'share' && t.fields.some((f) => f.type === 'items')) {
+        if (!seesPrices(ws.id, auth.memberId)) return send(res, 403, { error: 'Only owners and admins send quotes.' });
+        // A job on a Job Flow run: the run owns its stage, and a flow with a Quote step keeps sending it for owners
+        // and admins (docs/jobflows/PHASE2.md §2.3).
+        const jq = jobQuote(rec);
+        if (jq?.quoteStep && !['owner', 'admin'].includes(auth.role)) return send(res, 403, { error: 'Only owners and admins send this job’s quote.' });
         if (m === 'POST') {
           const body = await readJson(req, 10_000);
-          const hours = Number(body.hours) > 0 ? Math.min(Number(body.hours), 24 * 365) : null;
-          rec.share = { token: rec.share?.token || crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: hours ? Date.now() + hours * 3600_000 : null, by: auth.member };
-          const st = quoteStatus(t, rec);
-          if (!st || st === 'draft') setStatus(p, t, rec, 'Sent');
-          logTo(rec, { kind: 'quote', what: 'sent', by: auth.member });
-          const issued = fieldOf(t, 'issued');
-          if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today(rec.wsId);
+          shareRecord(rec, auth, body.hours, p, t);
         } else if (m === 'DELETE') rec.share = null;
         else return send(res, 405, { error: 'Method not allowed' });
         rec.updatedAt = Date.now();
         recordNews(rec, 'record.updated', auth.member);
-        return send(res, 200, publicRecord(rec));
+        return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
       }
       return send(res, 405, { error: 'Method not allowed' });
     }
@@ -1793,12 +1882,41 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
   // client, accepted_by, accepted_on (the Bids & Quotes template has them all).
   const today = (wsId) => teamDay(wsId);
   const statusField = (t) => { const f = fieldOf(t, 'status'); return f?.type === 'select' ? f : null; };
-  const quoteStatus = (t, rec) => { const f = statusField(t); return f ? (f.choices.find((c) => c.id === rec.values[f.id])?.label || '').toLowerCase() : ''; };
+  // A job on a Job Flow run keeps its quote's state on the record (the answer, the link), never in its stage, which
+  // the run owns; anything else reads its status field.
+  const quoteStatus = (t, rec) => {
+    if (jobQuote(rec)?.onRun) return rec.answer?.act === 'accept' ? 'accepted' : rec.answer?.act === 'decline' ? 'declined' : rec.share?.viewedAt ? 'viewed' : rec.share ? 'sent' : 'draft';
+    const f = statusField(t); return f ? (f.choices.find((c) => c.id === rec.values[f.id])?.label || '').toLowerCase() : '';
+  };
   function setStatus(p, t, rec, label) {
     const f = statusField(t);
     if (!f) return;
     rec.values[f.id] = choiceFor(f, label, true);
   }
+  // Sending a quote: the record's own link (a token kept across sends), marked sent. Used by the share route and Job
+  // Flows' Send the quote.
+  function shareRecord(rec, auth, hoursIn = null, p = db.projects[rec.projectId], t = p && typeOf(p, rec.typeId)) {
+    const hours = Number(hoursIn) > 0 ? Math.min(Number(hoursIn), 24 * 365) : null;
+    rec.share = { token: rec.share?.token || crypto.randomBytes(18).toString('base64url'), createdAt: Date.now(), expiresAt: hours ? Date.now() + hours * 3600_000 : null, by: auth.member };
+    const st = quoteStatus(t, rec);
+    if (!jobQuote(rec)?.onRun && (!st || st === 'draft')) setStatus(p, t, rec, 'Sent');
+    logTo(rec, { kind: 'quote', what: 'sent', by: auth.member });
+    const issued = fieldOf(t, 'issued');
+    if (issued?.type === 'date' && !rec.values[issued.id]) rec.values[issued.id] = today(rec.wsId);
+    // A job quote, first sent: its number, dates and look are kept on it (PHASE3B.md §3), so settings changed later
+    // don't change it under the customer. A New quote clears this and takes a fresh one.
+    if (jobQuote(rec)?.onRun && !rec.quoteLook && docsOf) {
+      const ws = db.workspaces[rec.wsId];
+      const d = docsOf(ws);
+      ws.quoteSeq = (ws.quoteSeq || 1000) + 1;
+      const on = today(rec.wsId);
+      rec.quoteLook = { number: `Q-${ws.quoteSeq}`, issued: on, validUntil: d.validDays ? new Date(Date.parse(on + 'T12:00:00Z') + d.validDays * 864e5).toISOString().slice(0, 10) : null, business: { ...d.business }, signature: d.signature ? { id: d.signature.id, name: d.signature.name, title: d.signature.title || '' } : null, terms: d.terms, footer: d.footer, showPrices: d.showPrices, accept: d.accept, showClientContact: d.showClientContact };
+    }
+    rec.updatedAt = Date.now();
+    return rec;
+  }
+  // How a quote looks: a job quote's own snapshot, or (any other quote) the team's settings now.
+  const lookOf = (rec) => rec.quoteLook || (docsOf ? { ...docsOf(db.workspaces[rec.wsId]), number: null, issued: null, validUntil: null, signature: docsOf(db.workspaces[rec.wsId]).signature } : { showPrices: true, accept: 'type' });
   const quoteFor = (token) => {
     const rec = token && Object.values(db.records).find((r) => r.share?.token === token);
     if (!rec || (rec.share.expiresAt && rec.share.expiresAt < Date.now()) || offline(rec.wsId)) return null;
@@ -1808,11 +1926,11 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
   };
   const money = (c) => (c / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
   const day = (d) => (d ? new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
-  async function readForm(req) {
+  async function readForm(req, max = 20_000) {
     let body = '';
     for await (const chunk of req) {
       body += chunk;
-      if (body.length > 20_000) break;
+      if (body.length > max) return { tooBig: true };
     }
     return Object.fromEntries(new URLSearchParams(body));
   }
@@ -1825,27 +1943,43 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
     const { rec, p, t, ws } = q;
     const status = quoteStatus(t, rec);
     const valid = fieldOf(t, 'valid_until');
-    const expired = valid && rec.values[valid.id] && rec.values[valid.id] < today(rec.wsId) && !['accepted', 'declined'].includes(status);
+    const look = lookOf(rec);
+    const until = rec.quoteLook ? rec.quoteLook.validUntil : valid && rec.values[valid.id];
+    const expired = !!until && until < today(rec.wsId) && !['accepted', 'declined'].includes(status);
+    // The customer's drawn signature, once accepted (served from here, never from outside).
+    if (req.method === 'GET' && act === 'signature') {
+      const png = rec.answer?.method === 'drawn' && rec.answer.signature && Buffer.from(String(rec.answer.signature).split(',')[1] || '', 'base64');
+      if (!png?.length) return quoteHtml(res, 404, null, '<h1>Not found</h1>');
+      res.writeHead(200, { 'Content-Type': 'image/png', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' });
+      return res.end(png);
+    }
     // An answer, once: accepted (with the name they typed) or declined (with why, if they say).
     if (req.method === 'POST' && (act === 'accept' || act === 'decline')) {
-      const form = await readForm(req);
+      const form = await readForm(req, 300_000);
+      if (form.tooBig) return quoteHtml(res, 413, db.workspaces[rec.wsId], `<h1>That signature is too big</h1><p><a href="/q/${token}">Go back and sign again</a></p>`);
       const name = cleanText(form.name, 120);
       const itemsF = t.fields.find((f) => f.type === 'items');
       const shown = itemsF ? rec.values[itemsF.id] || { rows: [] } : null;
       if (act === 'accept' && itemsF && form.v !== linesKey(shown)) {
         return quoteHtml(res, 409, db.workspaces[rec.wsId], `<h1>This quote changed</h1><p class="muted">It was updated after you opened it, so please look at it again before accepting.</p><p><a href="/q/${token}">See the quote as it is now</a></p>`);
       }
-      if (!['accepted', 'declined'].includes(status) && !expired && (act === 'decline' || name)) {
-        setStatus(p, t, rec, act === 'accept' ? 'Accepted' : 'Declined');
+      if (expired && act === 'accept') return quoteHtml(res, 409, db.workspaces[rec.wsId], `<h1>This quote has expired</h1><p class="muted">Contact us for an updated one.</p><p><a href="/q/${token}">See the quote</a></p>`);
+      // How the customer accepts (PHASE3B.md §3): type mode needs the typed name; draw mode needs a real drawing (the
+      // name is optional). Both still need the lines they saw (G3, above).
+      const drawn = act === 'accept' && look.accept === 'draw' ? inkedPng(form.sig) : null;
+      if (act === 'accept' && look.accept === 'draw' && !drawn) return quoteHtml(res, 400, db.workspaces[rec.wsId], `<h1>Please sign in the box</h1><p class="muted">Draw your signature to accept the quote.</p><p><a href="/q/${token}">Go back</a></p>`);
+      if (act === 'accept' && look.accept !== 'draw' && !name) return quoteHtml(res, 400, db.workspaces[rec.wsId], `<h1>Please type your name</h1><p class="muted">Type your full name to accept the quote.</p><p><a href="/q/${token}">Go back</a></p>`);
+      if (!['accepted', 'declined'].includes(status) && !(rec.answer && jobQuote(rec)?.onRun) && !expired) {
+        if (!jobQuote(rec)?.onRun) setStatus(p, t, rec, act === 'accept' ? 'Accepted' : 'Declined');
         const by = fieldOf(t, 'accepted_by');
         const on = fieldOf(t, 'accepted_on');
         if (by?.type === 'text') rec.values[by.id] = act === 'accept' ? name : `Declined${name ? ' by ' + name : ''}${form.reason ? ': ' + cleanText(form.reason, 500) : ''}`;
         if (on?.type === 'date') rec.values[on.id] = today(rec.wsId);
-        rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now(), ...(act === 'accept' && shown ? { lines: JSON.parse(JSON.stringify(shown)), total: itemsTotals(shown).total } : {}) };
+        rec.answer = { act, name, reason: cleanText(form.reason, 500), at: Date.now(), ...(act === 'accept' ? { method: drawn ? 'drawn' : 'typed', ...(drawn ? { signature: 'data:image/png;base64,' + drawn.toString('base64') } : {}) } : {}), ...(act === 'accept' && shown ? { lines: JSON.parse(JSON.stringify(shown)), total: itemsTotals(shown).total } : {}) };
         logTo(rec, { kind: 'quote', what: act === 'accept' ? 'accepted' : 'declined', by: name || 'The customer', note: rec.answer.reason || '' });
         rec.updatedAt = Date.now();
         const items = t.fields.find((f) => f.type === 'items');
-        broadcast(rec.wsId, { type: 'quote:answer', projectId: p.id, recordId: rec.id, act, name: name || 'The customer', title: quoteTitle(t, rec), total: items ? itemsTotals(rec.values[items.id]).total : 0 });
+        broadcast(rec.wsId, { type: 'quote:answer', projectId: p.id, recordId: rec.id, act, name: name || 'The customer', title: quoteTitle(t, rec), priced: { total: items ? itemsTotals(rec.values[items.id]).total : 0 } });
         recordNews(rec, 'record.updated', name ? `${name} (customer)` : 'Customer');
         try { onEvent?.(rec, act === 'accept' ? 'quote.accepted' : 'quote.declined', name || 'The customer', { amount: rec.answer.total }); } catch (e) { console.error('Automation event failed:', e.message); }
       }
@@ -1854,13 +1988,21 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
     }
     if (act) return quoteHtml(res, 404, null, '<h1>Not found</h1>');
     // Opening it marks a sent quote viewed.
-    if (status === 'sent') {
+    // A job on a Job Flow run: the view is kept on the link (rec.share.viewedAt), never in the job's stage, which the
+    // run owns (PHASE2.md §3).
+    if (jobQuote(rec)?.onRun && !rec.answer && !rec.share.viewedAt) {
+      rec.share.viewedAt = Date.now();
+      logTo(rec, { kind: 'quote', what: 'viewed', by: 'The customer' });
+      rec.updatedAt = Date.now();
+      recordNews(rec, 'record.updated', 'Customer');
+    } else if (status === 'sent' && !jobQuote(rec)?.onRun) {
       setStatus(p, t, rec, 'Viewed');
       logTo(rec, { kind: 'quote', what: 'viewed', by: 'The customer' });
       rec.updatedAt = Date.now();
       recordNews(rec, 'record.updated', 'Customer');
     }
-    return quoteHtml(res, 200, ws, quoteBody(q, token, expired));
+    const nonce = look.accept === 'draw' && !['accepted', 'declined'].includes(status) && !expired && !rec.answer ? crypto.randomBytes(16).toString('base64') : null;
+    return quoteHtml(res, 200, ws, quoteBody(q, token, expired, nonce), nonce);
   }
   // A fingerprint of a quote's lines: the customer accepts exactly what they saw, or not at all.
   const linesKey = (data) => crypto.createHash('sha256').update(JSON.stringify(data || { rows: [] })).digest('hex').slice(0, 24);
@@ -1873,38 +2015,67 @@ export function projectsModule({ seesLinked = () => true, proofUrl = () => null,
     const num = t.fields.find((f) => f.type === 'autonumber');
     return [num && rec.values[num.id], rec.values[t.primary]].filter(Boolean).join(' · ') || t.singular || 'Quote';
   };
-  function quoteBody({ rec, p, t, ws }, token, expired) {
+  function quoteBody({ rec, p, t, ws }, token, expired, nonce = null) {
     const v = (key) => { const f = fieldOf(t, key); return f ? rec.values[f.id] : undefined; };
     const items = t.fields.find((f) => f.type === 'items');
     const data = items ? rec.values[items.id] || { rows: [] } : { rows: [] };
     const tot = itemsTotals(data);
-    // The client, from the linked record.
-    const cf = fieldOf(t, 'client');
-    const client = cf?.type === 'link' && rec.values[cf.id]?.[0] && db.records[rec.values[cf.id][0]];
-    const ct = client && typeOf(p, client.typeId);
-    const cv = (key) => { const f = ct && fieldOf(ct, key); return f && client.values[f.id] != null ? String(client.values[f.id]) : ''; };
+    const look = lookOf(rec);
+    const job = !!rec.quoteLook;
+    // The client: a job's contact, or (Bids & Quotes) the linked client record.
+    let to = null;
+    const cfield = t.fields.find((f) => f.type === 'contact' && rec.values[f.id]);
+    const contact = cfield && db.contacts?.[rec.values[cfield.id]];
+    if (contact) to = { name: contact.name || '', lines: [contact.address, [contact.city, contact.state].filter(Boolean).join(', '), ...(look.showClientContact ? [contact.email, contact.phone] : [])].filter(Boolean) };
+    else {
+      const cf = fieldOf(t, 'client');
+      const client = cf?.type === 'link' && rec.values[cf.id]?.[0] && db.records[rec.values[cf.id][0]];
+      const ct = client && typeOf(p, client.typeId);
+      const cv = (key) => { const f = ct && fieldOf(ct, key); return f && client.values[f.id] != null ? String(client.values[f.id]) : ''; };
+      if (client) to = { name: cv('name') || cv(ct.fields.find((f) => f.id === ct.primary)?.key), lines: [cv('contact'), cv('address'), ...(look.showClientContact ? [cv('email'), cv('phone')] : [])].filter(Boolean) };
+    }
     const status = quoteStatus(t, rec);
     const brand = brandOf(ws);
-    const lines = data.rows.map((r) => `<tr><td>${escHtml(r.desc)}</td><td class="n">${escHtml(String(r.qty))}${r.unit ? ' ' + escHtml(r.unit) : ''}</td><td class="n">${money(r.price)}</td><td class="n">${money(Math.round(r.qty * r.price))}</td></tr>`).join('');
-    const answer = status === 'accepted' ? `<div class="done ok">✓ Accepted${v('accepted_by') ? ' by ' + escHtml(v('accepted_by')) : ''}${v('accepted_on') ? ' on ' + day(v('accepted_on')) : ''}. Thank you!</div>`
+    const prices = look.showPrices !== false;
+    const lines = data.rows.map((r) => `<tr><td>${escHtml(r.desc)}</td><td class="n">${escHtml(String(r.qty))}${r.unit ? ' ' + escHtml(r.unit) : ''}</td>${prices ? `<td class="n">${money(r.price)}</td><td class="n">${money(Math.round(r.qty * r.price))}</td>` : ''}</tr>`).join('');
+    const a = rec.answer;
+    const acceptedBy = a?.act === 'accept'
+      ? `<div class="done ok">✓ Accepted by ${escHtml(a.name || (a.method === 'drawn' ? 'signature' : 'the customer'))} (${a.method === 'drawn' ? 'signed by drawing' : 'typed name'}) on ${new Date(a.at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}. Thank you!${a.method === 'drawn' ? `<div class="sig"><small>Accepted by</small><img src="/q/${token}/signature" alt="Signature"></div>` : ''}</div>`
+      : `<div class="done ok">✓ Accepted${v('accepted_by') ? ' by ' + escHtml(v('accepted_by')) : ''}${v('accepted_on') ? ' on ' + day(v('accepted_on')) : ''}. Thank you!</div>`;
+    const draw = look.accept === 'draw';
+    const form = draw
+      ? `<form class="accept" method="post" action="/q/${token}/accept"><input type="hidden" name="v" value="${linesKey(data)}"><input type="hidden" name="sig" value="">
+          <label>Sign here to accept this quote</label><canvas class="pad" width="600" height="180"></canvas>
+          <label>Your name (optional)<input name="name" maxlength="120" autocomplete="name"></label>
+          <button type="submit">Accept quote · ${money(tot.total)}</button><button type="button" class="ghost" data-clear>Clear the signature</button></form>
+          <script nonce="${nonce}">(()=>{const c=document.querySelector('canvas.pad'),x=c.getContext('2d'),f=c.closest('form');let on=false,inked=false;x.lineWidth=2.5;x.lineCap='round';x.strokeStyle='#111';const at=(e)=>{const r=c.getBoundingClientRect();return[(e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height]};c.addEventListener('pointerdown',(e)=>{on=true;const[p,q]=at(e);x.beginPath();x.moveTo(p,q)});c.addEventListener('pointermove',(e)=>{if(!on)return;const[p,q]=at(e);x.lineTo(p,q);x.stroke();inked=true});addEventListener('pointerup',()=>{on=false});f.querySelector('[data-clear]').addEventListener('click',()=>{x.clearRect(0,0,c.width,c.height);inked=false});f.addEventListener('submit',(e)=>{if(!inked){e.preventDefault();alert('Please sign in the box.');return}f.sig.value=c.toDataURL('image/png')})})();</script>`
+      : `<form class="accept" method="post" action="/q/${token}/accept"><input type="hidden" name="v" value="${linesKey(data)}"><label>Type your full name to accept this quote<input name="name" required maxlength="120" autocomplete="name"></label><button>Accept quote · ${money(tot.total)}</button></form>`;
+    const answer = status === 'accepted' ? acceptedBy
       : status === 'declined' ? '<div class="done">This quote was declined. Thanks for letting us know.</div>'
-      : expired ? `<div class="done">This quote expired on ${day(v('valid_until'))}. Contact us for an updated one.</div>`
-      : `<form class="accept" method="post" action="/q/${token}/accept"><input type="hidden" name="v" value="${linesKey(data)}"><label>Type your full name to accept this quote<input name="name" required maxlength="120" autocomplete="name"></label><button>Accept quote · ${money(tot.total)}</button></form>
+      : expired ? `<div class="done">This quote expired on ${day(rec.quoteLook ? rec.quoteLook.validUntil : v('valid_until'))}. Contact us for an updated one.</div>`
+      : `${form}
          <details class="decline"><summary>Decline</summary><form method="post" action="/q/${token}/decline"><label>Your name<input name="name" maxlength="120" autocomplete="name"></label><label>Anything we should know? (optional)<textarea name="reason" rows="3" maxlength="500"></textarea></label><button class="ghost">Decline quote</button></form></details>`;
+    const issued = job ? look.issued : v('issued');
+    const validUntil = job ? look.validUntil : v('valid_until');
+    const terms = v('terms') || look.terms || '';
+    const sig = look.signature;
     return `<header>${brand.logo ? `<img class="brand" src="${logoUrl(brand.logo)}" alt="">` : ''}<div><b>${escHtml(ws.name)}</b></div></header>
-      <h1>${escHtml(quoteTitle(t, rec))}</h1>
-      <div class="meta">${v('issued') ? `<span>Issued ${day(v('issued'))}</span>` : ''}${v('valid_until') ? `<span>Valid until ${day(v('valid_until'))}</span>` : ''}</div>
-      ${client ? `<div class="to"><small>Prepared for</small><b>${escHtml(cv('name') || cv(ct.fields.find((f) => f.id === ct.primary)?.key))}</b>${[cv('contact'), cv('address'), cv('email'), cv('phone')].filter(Boolean).map((x) => `<div>${escHtml(x)}</div>`).join('')}</div>` : ''}
-      <table><thead><tr><th>Description</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr></thead><tbody>${lines || '<tr><td colspan="4" class="muted">No items yet.</td></tr>'}</tbody></table>
-      <div class="sums"><div><span>Subtotal</span><span>${money(tot.subtotal)}</span></div>${tot.discount ? `<div><span>Discount${data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}</span><span>−${money(tot.discount)}</span></div>` : ''}${data.taxRate ? `<div><span>Tax (${data.taxRate}%)</span><span>${money(tot.tax)}</span></div>` : ''}<div class="total"><span>Total</span><span>${money(tot.total)}</span></div></div>
-      ${v('terms') ? `<div class="terms"><small>Terms</small><p>${escHtml(v('terms')).replace(/\n/g, '<br>')}</p></div>` : ''}
-      ${answer}${proofLine(ws)}`;
+      ${bizHtml(look.business, escHtml)}
+      <h1>${escHtml([look.number, quoteTitle(t, rec)].filter(Boolean).join(' · '))}</h1>
+      <div class="meta">${issued ? `<span>Issued ${day(issued)}</span>` : ''}${validUntil ? `<span>Valid until ${day(validUntil)}</span>` : ''}</div>
+      ${to ? `<div class="to"><small>Prepared for</small><b>${escHtml(to.name)}</b>${to.lines.map((x) => `<div>${escHtml(x)}</div>`).join('')}</div>` : ''}
+      <table><thead><tr><th>Description</th><th class="n">Qty</th>${prices ? '<th class="n">Price</th><th class="n">Amount</th>' : ''}</tr></thead><tbody>${lines || `<tr><td colspan="${prices ? 4 : 2}" class="muted">No items yet.</td></tr>`}</tbody></table>
+      <div class="sums">${prices ? `<div><span>Subtotal</span><span>${money(tot.subtotal)}</span></div>${tot.discount ? `<div><span>Discount${data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}</span><span>−${money(tot.discount)}</span></div>` : ''}${data.taxRate ? `<div><span>Tax (${data.taxRate}%)</span><span>${money(tot.tax)}</span></div>` : ''}` : ''}<div class="total"><span>Total</span><span>${money(tot.total)}</span></div></div>
+      ${terms ? `<div class="terms"><small>Terms</small><p>${escHtml(terms).replace(/\n/g, '<br>')}</p></div>` : ''}
+      ${sig ? `<div class="sig"><small>Prepared by</small><img src="/brand/${escHtml(sig.id)}" alt=""><div><b>${escHtml(sig.name)}</b>${sig.title ? `, ${escHtml(sig.title)}` : ''}</div></div>` : ''}
+      ${answer}${look.footer ? `<p class="foot">${escHtml(look.footer)}</p>` : ''}${proofLine(ws)}`;
   }
   // Our licenses & insurance, when the team shows them on its quotes (the workspace profile, step 3).
   const proofLine = (ws) => { const u = proofUrl(ws); return u ? `<p class="proof" style="text-align:center;margin-top:22px;font-size:14px"><a href="${escHtml(u)}" rel="noopener">🪪 Our licenses &amp; insurance</a></p>` : ''; };
-  function quoteHtml(res, code, ws, body) {
+  function quoteHtml(res, code, ws, body, nonce = null) {
     const accent = ws ? brandOf(ws).accent : null;
-    res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'" });
+    // Nothing loads from outside; the signature pad's script runs only by this page's nonce.
+    res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': `default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'${nonce ? `; script-src 'nonce-${nonce}'` : ''}` });
     res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quote</title><style>
 :root{color-scheme:light;--text:#16161a;--muted:#6b6b76;--line:#e4e4ea;--accent:${accent || '#5b4ee0'};--soft:#f6f6f8}
 *{box-sizing:border-box}body{margin:0;background:var(--soft);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px 14px}
@@ -1921,6 +2092,9 @@ button{font:inherit;font-weight:700;background:var(--accent);color:#fff;border:0
 .decline{margin-top:12px;color:var(--muted);font-size:13.5px}.decline form{display:flex;flex-direction:column;gap:10px;margin-top:10px}.decline summary{cursor:pointer}
 .done{margin-top:28px;padding:16px;border-radius:12px;background:var(--soft);font-weight:600}.done.ok{background:#e7f8ef;color:#126b3d}.muted{color:var(--muted)}
 footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
+.biz{font-size:13.5px;color:var(--muted);margin:-8px 0 18px}.biz b{color:var(--text)}.biz a{color:inherit}
+.sig{margin-top:22px;font-size:13.5px}.sig small{display:block;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:11px;margin-bottom:4px}.sig img{max-height:70px;max-width:260px;display:block}
+.pad{width:100%;height:150px;border:1px dashed var(--line);border-radius:10px;background:#fff;touch-action:none}.foot{text-align:center;color:var(--muted);font-size:13px;margin-top:22px}
 </style></head><body><main>${body}</main><footer>Sent with Kloomie</footer></body></html>`);
   }
   // A record's quote as other systems need it (QuickBooks estimates): its number, lines, customer and where it stands.
@@ -2018,9 +2192,13 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     }
     return v;
   }
-  function outRecord(ws, p, t, r) {
+  function outRecord(ws, p, t, r, view = null) {
     const calc = calcValues(p, t, r);
-    const out = (f) => (CALC.has(f.type) ? (calc[f.id] == null ? null : calcFormat(p, t, f) === 'money' ? calc[f.id] / 100 : calc[f.id]) : outValue(ws, f, r.values[f.id]));
+    const hidden = new Set(view?.prices ? [] : pricedIds(p, t));
+    const out = (f) => {
+      if (hidden.has(f.id)) return f.type === 'items' && r.values[f.id] ? { rows: (r.values[f.id].rows || []).map((x) => ({ id: x.id, description: x.desc ?? '', qty: x.qty, unit: x.unit ?? '' })), hidden: true } : null;
+      return CALC.has(f.type) ? (calc[f.id] == null ? null : calcFormat(p, t, f) === 'money' ? calc[f.id] / 100 : calc[f.id]) : outValue(ws, f, r.values[f.id]);
+    };
     return { id: r.id, external_id: r.extId || null, type: t.key, created_at: new Date(r.createdAt).toISOString(), updated_at: new Date(r.updatedAt).toISOString(),
       fields: Object.fromEntries(t.fields.map((f) => [f.key, out(f)])) };
   }
@@ -2066,26 +2244,28 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       const start = after ? all.findIndex((r) => `${r.updatedAt}.${r.id}` === after) + 1 : 0;
       const page = all.slice(start, start + limit);
       const last = page.at(-1);
-      return send(res, 200, { records: page.map((r) => outRecord(ws, p, t, r)), next_cursor: start + limit < all.length && last ? `${last.updatedAt}.${last.id}` : null });
+      return send(res, 200, { records: page.map((r) => outRecord(ws, p, t, r, viewOf(ws.id, auth.memberId))), next_cursor: start + limit < all.length && last ? `${last.updatedAt}.${last.id}` : null });
     }
     if (m === 'POST' && !rid_) {
       write();
       const body = await readJson(req, 200_000);
+      if (pricedWrite(ws.id, auth.memberId, p, t, inFields(t, body.fields))) return send(res, 403, PRICES_403);
       { const held = holdDiscount(ws, auth, p, t, null, inFields(t, body.fields), null, null); if (held) return send(res, held.status, held.body); }
       if (body.external_id && Object.values(db.records).some((r) => r.projectId === p.id && r.typeId === t.id && r.extId === String(body.external_id))) return send(res, 409, { error: 'A record with that external_id is already here. Use PUT …/records/external/:id to update it.' });
       const rec = newRecord(ws, p, t, auth, inFields(t, body.fields), body.external_id, { addChoices: true });
       recordNews(rec, 'record.created', auth.member);
-      return send(res, 201, outRecord(ws, p, t, rec));
+      return send(res, 201, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
     }
     // Upsert by the outside system's id.
     if (rid_ === 'external' && extra_) {
       const ext = decodeURIComponent(extra_);
       let rec = Object.values(db.records).find((r) => r.projectId === p.id && r.typeId === t.id && r.extId === ext);
-      if (m === 'GET') return rec ? send(res, 200, outRecord(ws, p, t, rec)) : send(res, 404, { error: 'No record with that external_id.' });
+      if (m === 'GET') return rec ? send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId))) : send(res, 404, { error: 'No record with that external_id.' });
       if (m === 'PUT') {
         write();
         const body = await readJson(req, 200_000);
         const fields = inFields(t, body.fields);
+        if (pricedWrite(ws.id, auth.memberId, p, t, fields, rec || null)) return send(res, 403, PRICES_403);
         { const held = holdDiscount(ws, auth, p, t, rec || null, fields, null, null); if (held) return send(res, held.status, held.body); }
         if (rec) {
           const before = { ...rec.values };
@@ -2095,11 +2275,11 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
           logChanges(ws, p, t, rec, before, auth.member);
           rec.updatedAt = Date.now();
           recordNews(rec, 'record.updated', auth.member);
-          return send(res, 200, outRecord(ws, p, t, rec));
+          return send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
         }
         rec = newRecord(ws, p, t, auth, fields, ext, { addChoices: true });
         recordNews(rec, 'record.created', auth.member);
-        return send(res, 201, outRecord(ws, p, t, rec));
+        return send(res, 201, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
       }
       return send(res, 405, { error: 'Use GET or PUT.' });
     }
@@ -2119,10 +2299,11 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       }
       return send(res, 405, { error: 'Use GET or POST.' });
     }
-    if (m === 'GET') return send(res, 200, outRecord(ws, p, t, rec));
+    if (m === 'GET') return send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
     if (m === 'PATCH') {
       write();
       const body = await readJson(req, 200_000);
+      if (pricedWrite(ws.id, auth.memberId, p, t, inFields(t, body.fields), rec)) return send(res, 403, PRICES_403);
       { const held = holdDiscount(ws, auth, p, t, rec, inFields(t, body.fields), null, null); if (held) return send(res, held.status, held.body); }
       const before = { ...rec.values };
       applyValues(ws, p, t, rec, inFields(t, body.fields), { addChoices: true });
@@ -2132,7 +2313,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       if (body.external_id !== undefined) rec.extId = body.external_id ? cleanText(body.external_id, 200) : null;
       rec.updatedAt = Date.now();
       recordNews(rec, 'record.updated', auth.member);
-      return send(res, 200, outRecord(ws, p, t, rec));
+      return send(res, 200, outRecord(ws, p, t, rec, viewOf(ws.id, auth.memberId)));
     }
     if (m === 'DELETE') {
       write();
@@ -2206,7 +2387,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     const ws = db.workspaces[rec.wsId];
     const t = p && typeOf(p, rec.typeId);
     if (!p || !t || !ws || p.private) return; // private projects stay in Kloomie
-    const event = { id: 'evt_' + rid(), type, created_at: new Date().toISOString(), by, project: { id: p.id, name: p.name }, list: t.key, data: outRecord(ws, p, t, rec) };
+    const event = { id: 'evt_' + rid(), type, created_at: new Date().toISOString(), by, project: { id: p.id, name: p.name }, list: t.key, data: outRecord(ws, p, t, rec, FULL) };
     for (const h of hooks) deliver(h, event);
   }
   // Signed like Stripe: X-Kloomie-Signature: t=<seconds>,v1=<hmac of "t.body">. The X-Column-* copies are for receivers set up before the rename. Tried 4 times over ~10 minutes.
@@ -2263,25 +2444,25 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   const stateFor = (ws, auth) => Object.values(db.projects).filter((p) => p.wsId === ws.id && sees(p, auth.memberId)).map(publicProject);
 
   // A record told in words, for the AI: its fields, what links to it, its timeline and open tasks.
-  function recordStory(rec, ws, sees1 = null) { // sees1(kind, x): the reader's sight of the tasks and logged attempts it quotes (every caller passes it)
+  function recordStory(rec, ws, sees1 = null, view = null) { // sees1(kind, x): the reader's sight of the tasks and logged attempts it quotes (every caller passes it)
     const p = db.projects[rec.projectId];
     const t = p && typeOf(p, rec.typeId);
     if (!t) return '';
     const lines = [`A ${t.singular || t.name} in the project “${p.name}”: ${recName(p, rec)}.`];
     for (const f of t.fields) {
       if (f.id === t.primary || rec.values[f.id] == null) continue;
-      if (f.type === 'items') {
+      if (f.type === 'items' && view?.prices) {
         const v = rec.values[f.id];
         const tt = itemsTotals(v);
         lines.push(`${f.name}: ${v.rows.map((r) => `${r.qty} ${r.unit || ''} ${r.desc} at $${(r.price / 100).toFixed(2)}`).join('; ')}. Total $${(tt.total / 100).toFixed(2)}${tt.cost != null ? `, margin ${tt.marginPct}%` : ''}.`);
-      } else lines.push(`${f.name}: ${words(ws, p, f, rec.values[f.id])}`);
+      } else lines.push(`${f.name}: ${words(ws, p, f, rec.values[f.id], view)}`);
     }
     for (const o of p.types) for (const f of o.fields) if (f.type === 'link' && f.target === t.id) {
       const from = Object.values(db.records).filter((x) => x.typeId === o.id && (x.values[f.id] || []).includes(rec.id));
-      if (from.length) lines.push(`${o.name} linked to it: ${from.slice(0, 10).map((x) => `${recName(p, x)} (${o.fields.filter((y) => ['select', 'money', 'date', 'items'].includes(y.type) && x.values[y.id] != null).map((y) => `${y.name.toLowerCase()} ${words(ws, p, y, x.values[y.id])}`).join(', ')})`).join('; ')}`);
+      if (from.length) lines.push(`${o.name} linked to it: ${from.slice(0, 10).map((x) => `${recName(p, x)} (${o.fields.filter((y) => ['select', 'money', 'date', 'items'].includes(y.type) && x.values[y.id] != null).map((y) => `${y.name.toLowerCase()} ${words(ws, p, y, x.values[y.id], view)}`).join(', ')})`).join('; ')}`);
     }
     const shown = (kind, x) => !sees1 || (!!x && sees1(kind, x)); // a timeline line about one that's gone is left out too: whose it was can't be told
-    const log = (rec.log || []).filter((e) => (!e.taskId || shown('task', db.tasks[e.taskId])) && (!e.attemptId || shown('attempt', db.attempts[e.attemptId]))).slice(0, 30).map((e) => `- ${teamDay(rec.wsId, e.at)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
+    const log = (rec.log || []).filter((e) => (!e.taskId || shown('task', db.tasks[e.taskId])) && (!e.attemptId || shown('attempt', db.attempts[e.attemptId]))).slice(0, 30).map((e) => (view?.prices ? e : redactEntry(p, t, e))).map((e) => `- ${teamDay(rec.wsId, e.at)} ${e.by || ''}: ${e.kind}${e.outcome ? ' (' + e.outcome + ')' : ''}${e.what ? ' ' + e.what : ''}${e.field ? ` ${e.field} ${e.from || 'empty'} → ${e.to || 'empty'}` : ''}${e.note ? ': ' + e.note.slice(0, 300) : ''}${e.campaign ? ` [campaign ${e.campaign}]` : ''}`);
     if (log.length) lines.push(`Timeline, newest first:\n${log.join('\n')}`);
     const tasks = Object.values(db.tasks).filter((x) => x.recordId === rec.id && !x.done && shown('task', x));
     if (tasks.length) lines.push(`Open tasks: ${tasks.map((x) => x.text + (x.due ? ` (due ${x.due})` : '')).join('; ')}`);
@@ -2449,6 +2630,16 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
   const dateField = (t, id) => { const f = fieldOf(t, id); return f && (f.type === 'date' || (f.type === 'formula' && f.format === 'date')) ? f : null; };
 
   // A record made by Kloomie for someone (an AI plan they accepted): made, announced.
+  // Job Flows (docs/jobflows/CONTRACTS.md §2): the same checks as POST /projects/:id/records (the rules' OK, the
+  // record's own validation), without the news, so the job and its run go out together. A throw writes nothing.
+  // A job made with something built against it (a Job Flow's run): before(rec) runs once the record is ready and before
+  // it's kept; a throw there keeps no record and uses up no number. Nothing is told until announceRecord.
+  function jobRecord(ws, p, t, auth, values, req, body, before) {
+    const held = holdDiscount(ws, auth, p, t, null, values, req, body);
+    if (held) return { held };
+    return { rec: newRecord(ws, p, t, auth, values, null, { addChoices: false, before }) };
+  }
+  const announceRecord = (rec, by) => recordNews(rec, 'record.created', by);
   function createRecord(ws, p, t, auth, values) {
     const rec = newRecord(ws, p, t, auth, values, null, { addChoices: false });
     recordNews(rec, 'record.created', auth.member);
@@ -2487,5 +2678,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { pricedWrite, rawFor, seesPrices, viewOf, FULL, isPriced, pricedIds, redactValues, jobRecord, announceRecord, publicRecordOf: (rec, view = null) => publicRecord(rec, view), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

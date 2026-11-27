@@ -1,0 +1,105 @@
+FAIL server/jobflows.js exports priceKey
+FAIL (setup) three items, one archived
+PASS (setup) a Crew role
+FAIL refused at publish: quote billing with no quote step (200 )
+FAIL refused at publish: quote billing with the quote after the invoice (404 That flow is gone.)
+FAIL refused at publish: quote billing with no invoice step (404 That flow is gone.)
+FAIL refused at publish: quote billing with two quote steps (404 That flow is gone.)
+FAIL refused at publish: hand billing with a quote step (404 That flow is gone.)
+FAIL refused at publish: no billing (hand) with a quote step (404 That flow is gone.)
+FAIL refused at publish: auto billing with a quote step (404 That flow is gone.)
+FAIL refused at publish: auto billing with two invoice steps (200 )
+FAIL refused at publish: auto billing with no invoice step (200 )
+FAIL refused at publish: an unknown billing (200 )
+FAIL refused at publish: a quote step for anyone (404 That flow is gone.)
+FAIL refused at publish: an invoice step for anyone (200 )
+FAIL refused at publish: a payment step for one member (200 )
+FAIL refused at publish: an invoice step for a role (200 )
+FAIL refused at publish: a default item twice (200 )
+FAIL refused at publish: an archived default item (200 )
+FAIL refused at publish: a made-up default item (200 )
+FAIL refused at publish: a default item with qty 0 (200 )
+FAIL refused at publish: a default item with a negative qty (200 )
+FAIL refused at publish: a default item with qty over 1e6 (200 )
+FAIL refused at publish: dueDays over 120 (200 )
+FAIL refused at publish: dueDays below 0 (200 )
+FAIL refused at publish: dueDays that isn’t whole (200 )
+FAIL refused at publish: 51 default items
+PASS a fractional default qty is fine (1.5 hours)
+FAIL an invoice or payment step that names nobody is saved for owners and admins
+FAIL a Phase 1 shaped flow publishes as billing hand, no items, dueDays null
+FAIL a quote flow publishes, its quote step for owners and admins: That flow is gone.
+FAIL an auto flow publishes, its invoice step how auto: 
+PASS (setup) a hand flow with default items and dueDays 7: 
+FAIL a job with no lines gets the flow’s default items: undefined
+FAIL and no cost is put on the rows
+FAIL an empty items field (rows []) is filled
+FAIL an empty items field (null) is filled
+PASS a job that already has lines is left alone
+FAIL an invoice made by hand from the step is due dueDays after it’s issued: 2026-11-25 → 2026-12-09
+PASS with dueDays null it’s 14 days, as today
+PASS on a list with no items field the defaults are dropped and the job starts: 200 
+FAIL starting on a flow whose default item was archived is refused, naming it, and makes no job: 200 
+FAIL attaching it is refused too: no run, no lines: 200
+PASS a failed start keeps no job (and so no lines)
+FAIL a failed attach leaves the job’s lines empty and no run: 409
+FAIL (setup) a quote-first flow: That flow is gone.
+FAIL an acceptance from before the run doesn’t meet the quote step: undefined
+FAIL the quote step is current: draft, $50.00, no link yet: undefined
+FAIL a member sees only the quote’s status: undefined
+PASS the member’s run carries no total or link
+PASS the member’s Jobs list row has no total
+FAIL the owner’s Jobs list row has the total: undefined
+FAIL a quote step has no Done (400)
+FAIL a member can’t skip it, even with canSkip
+FAIL or send it
+FAIL or requote it
+FAIL sending it: status sent, the link, still current
+PASS sending a quote doesn’t change the job’s stage (the run owns it): undefined
+PASS declining doesn’t write the job’s stage
+FAIL a decline keeps it open, with who and why: undefined
+FAIL New quote: back to draft
+PASS the old link is dead
+FAIL the old answer is on the job’s timeline
+FAIL the next send makes a new link
+FAIL accepting it meets the quote step; the job moves on: undefined
+PASS accepting doesn’t write the job’s stage either
+FAIL the accepted lines can’t be edited (G3), and the step stays met
+FAIL requote after acceptance (no invoice yet) reopens the quote step
+FAIL the new lines accepted: met again
+FAIL with quote billing the invoice step is by hand: it waits
+PASS and nothing made it by itself
+FAIL the invoice is the accepted lines: undefined
+FAIL requote once an invoice exists: 409
+FAIL the job’s lines still match the acceptance, so editing the invoice doesn’t reopen the quote step
+FAIL an admin skips the quote step with a reason
+PASS (setup) an auto flow: 
+PASS nothing is made while an earlier step is open
+FAIL when the invoice step comes up, the invoice is made and sent by itself
+FAIL from the job’s lines, due in dueDays
+FAIL invoice.sent went off once
+FAIL the invoice step is met; payment is next
+FAIL a member sees auto, not the waiting state or the invoice number
+FAIL reopening and redoing an earlier step makes no second invoice
+FAIL voiding it makes one replacement, sent
+FAIL and only one, whatever sweeps follow: 0
+FAIL a $0 job gets its invoice made
+FAIL but it stays a draft, waiting (zero): undefined undefined
+FAIL fixed and sent by hand: the state is sent, the same invoice, invoice.sent once
+FAIL Ann’s run makes its invoice
+FAIL the send is held: a draft, waiting for approval, one approval asked: undefined undefined 0
+FAIL later sweeps don’t try again or ask again
+FAIL sending it by hand goes through the same hold
+FAIL the owner’s OK sends it: 404 That request is gone.
+FAIL after the approval: sent, the same invoice, invoice.sent once
+FAIL a run whose owner is no longer an admin makes nothing and waits (owner): undefined
+FAIL an admin makes and sends it by hand: met, state sent
+PASS (setup) restarted with the send failing
+FAIL both invoices are made before the send fails
+FAIL and are still drafts
+PASS restarted, sending works again
+FAIL the next sweep sends the invoice that was made
+FAIL the same invoice, no second one, invoice.sent once
+FAIL Ann was made a member after hers was made: kept as a draft, no replacement, waiting (owner): undefined
+PASS a flow without billing makes no invoice by itself
+85 FAILED

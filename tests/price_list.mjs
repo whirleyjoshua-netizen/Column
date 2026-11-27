@@ -38,7 +38,7 @@ try {
   ok(r.status === 200 && fi && fi.source === 'list' && fi.price === 18500 && fi.cost === 7000, 'the price list has the board’s item, with price and cost');
   ok(ri && ri.source === 'inventory' && ri.price === 12000 && ri.cost === 9000 && ri.unit === 'roll', 'and Inventory’s items, in the same list');
   r = await cy('GET', '/price-list');
-  ok(r.status === 200 && r.body.items.some((x) => x.id === 'inv:' + roll.id) && r.body.items.every((x) => x.cost === undefined), 'a member gets the prices, not what things cost the business');
+  ok(r.status === 200 && r.body.items.length === 0, 'a member gets no price list: prices are for owners and admins (docs/jobflows/PRICES.md)');
 
   // A job on another board can price from both.
   const tr = (await ada('POST', '/projects', { template: 'trades', trades: ['blinds'] })).body;

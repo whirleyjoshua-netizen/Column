@@ -1,6 +1,7 @@
 // Templates in the browser (Workspace → Tools → Templates, 2026-11-16): make an email template with a {word}, find it by
 // kind and search, edit it, import one from a file, see the team's paperwork (a doc template makes a new doc), and start
 // an automation's email step from a template (copied into the step).
+import { autoUI } from './autobuild.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -99,11 +100,13 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=automations]').click(); true`);
   await A.until(`[...document.querySelectorAll('#tool button')].some((b) => b.textContent === '+ New automation')`, 8000);
   await A.ev(`[...document.querySelectorAll('#tool button')].find((b) => b.textContent === '+ New automation').click(); true`);
-  await A.until(`!!document.querySelector('#sheet .auto-step-kind')`, 8000);
-  await A.pick(`document.querySelector('#sheet .auto-step-kind')`, 'email');
+  const B = autoUI(A);
+  await B.step(B.act(0), 'email');
+  await B.adv();
   ok(await A.until(`!!document.querySelector('#sheet .auto-tpl')`), 'an email step offers “Use a template…”');
   ok(await A.ev(`[...document.querySelector('#sheet .auto-tpl').options].map((o) => o.textContent).includes('Quote follow-up (Email)')`), 'listing the team’s email and reply templates');
   await A.pick(`document.querySelector('#sheet .auto-tpl')`, saved.id);
+  await B.set();
   ok(await A.until(`document.querySelector('#sheet .auto-email-sub')?.value === 'Your quote for {record}' && document.querySelector('#sheet .auto-email-body')?.value === 'Hi {customer}, checking in on {record}.'`), 'picking one copies its subject and wording into the step');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }

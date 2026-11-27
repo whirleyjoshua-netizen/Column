@@ -2,6 +2,7 @@
 // steps and instructions, materials (picked from Inventory, ticked off as used, which takes them out of stock) and
 // the customer's signature on a pad. Done is refused until the steps are ticked and the customer has signed. The
 // number shows on the task's card and row, and Print makes a paper work order.
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -15,8 +16,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-woui`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-woui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-woui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 async function tab(url) {
   let t;
@@ -58,8 +59,8 @@ try {
   await A.tap(`document.querySelector('.camp-card')`);
   await A.until(`!!document.querySelector('#camps .cc-tab[data-ctab=work]')`);
   await A.tap(`document.querySelector('#camps .cc-tab[data-ctab=work]')`);
-  await A.until(`!!document.querySelector('#camps .cc-wview [data-wv=list]')`);
-  await A.tap(`document.querySelector('#camps .cc-wview [data-wv=list]')`);
+  await A.until(`!!document.querySelector('#camps .cc-wview-sel')`);
+  await A.pick(`document.querySelector('#camps .cc-wview-sel')`, 'list');
   await A.until(`!!document.querySelector('#camps .cc-tr[data-task="${task.id}"]')`);
   await A.tap(`document.querySelector('#camps .cc-tr[data-task="${task.id}"]')`);
   ok(await A.until(`!!document.querySelector('#sheet .td-mkwo')`), 'the task’s drawer has 📋 Make it a work order');
@@ -104,7 +105,7 @@ try {
   await A.tap(`document.querySelector('#sheet .td-status [data-st=done]')`);
   ok((await wait((y) => y.done)).done, 'now Done finishes it');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
-  await A.tap(`document.querySelector('#camps .cc-wf [data-wf=all]')`);
+  await A.tap(`document.querySelector('#camps .cc-chip[data-chip=all]')`);
   ok(await A.until(`/WO-\\d+/.test(document.querySelector('#camps .cc-tr[data-task="${task.id}"] .wo-chip')?.textContent || '')`), 'its number shows on its row');
   // Print opens a paper work order.
   await A.ev(`(() => { window.__opened = null; const real = window.open; window.open = (...a) => { const w = real.apply(window, a); window.__opened = w; return w; }; return true; })()`);

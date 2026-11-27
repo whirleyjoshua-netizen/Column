@@ -1,6 +1,7 @@
 // Command Center part 4 (2026-11-20): the Work tab shows the campaign’s tasks as a List, a Board (columns by status,
 // phase or person; drag a card across to change it), a Timeline (a bar from start to due, dragged or pulled by
 // either end, drawn on an empty row, arrows for what it waits for) and a Calendar (drag a task to another day).
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -14,8 +15,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-cviews`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-cviews`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-cviews`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 async function tab(url) {
   let t;
@@ -62,7 +63,7 @@ try {
   await A.tap(`document.querySelector('.camp-card')`);
   await A.until(`!!${T('.cc-tab[data-ctab=work]')}`);
   await A.ev(`${T('.cc-tab[data-ctab=work]')}.click(); true`);
-  ok(await A.until(`[...document.querySelectorAll('#camps .cc-wview [data-wv]')].map((b) => b.dataset.wv).join() === 'list,board,timeline,calendar' && !!${T('.cc-table')}`), 'Work has List, Board, Timeline and Calendar, on List');
+  ok(await A.until(`[...(${T('.cc-wview-sel')}?.options || [])].map((o) => o.value).join() === 'list,board,timeline,calendar' && !!${T('.cc-table')}`), 'Work has List, Board, Timeline and Calendar, on List');
   const drag = async ([x1, y1], [x2, y2]) => {
     await A.mouse('mouseMoved', x1, y1); await A.cmd('Input.dispatchMouseEvent', { type: 'mousePressed', x: x1, y: y1, button: 'left', buttons: 1, clickCount: 1 });
     for (let i = 1; i <= 10; i++) { await A.mouse('mouseMoved', x1 + ((x2 - x1) * i) / 10, y1 + ((y2 - y1) * i) / 10); await sleep(20); }
@@ -73,7 +74,7 @@ try {
   const card = (id) => T(`.ccb-card[data-task="${id}"]`);
   const col = (k) => T(`.ccb-col[data-col="${k}"]`);
   // Board, by status.
-  await A.ev(`${T('.cc-wview [data-wv=board]')}.click(); true`);
+  await A.pick(T('.cc-wview-sel'), 'board');
   ok(await A.until(`[...document.querySelectorAll('#camps .ccb-col')].map((c) => c.dataset.col).join() === 'open,doing,wait,done'`), 'Board: Not started, In progress, Waiting, Done: ' + await A.ev(`[...document.querySelectorAll('#camps .ccb-col')].map((c) => c.dataset.col).join()`));
   ok(await A.ev(`!!${col('open')}.querySelector('[data-task="${A0.id}"]') && !!${col('wait')}.querySelector('[data-task="${C0.id}"]')`), 'a task that waits for another is under Waiting');
   await drag(await mid(card(A0.id)), await at(col('doing')));
@@ -97,8 +98,8 @@ try {
   await drag(await mid(card(B0.id)), await at(col(me)));
   ok((await wait(B0.id, (x) => x.assigneeId === me)).assigneeId === me, 'dragged onto Joshua, it’s his');
   // Timeline.
-  await A.ev(`${T('.cc-wview [data-wv=timeline]')}.click(); true`);
-  await A.ev(`${T('.cc-wf [data-wf=all]')}.click(); true`);
+  await A.pick(T('.cc-wview-sel'), 'timeline');
+  await A.ev(`${T('.cc-chip[data-chip=all]')}.click(); true`);
   ok(await A.until(`!!${T(`.cct-bar[data-task="${C0.id}"]`)} && !${T(`.cct-bar[data-task="${B0.id}"]`)}`), 'Timeline: a bar for each dated task, none for one with no days');
   ok(await A.until(`document.querySelectorAll('#camps .cct-links path:not(marker path)').length >= 1`), 'an arrow for what it waits for');
   ok(await A.ev(`[...document.querySelectorAll('#camps .cct-phase .cct-name b')].map((b) => b.textContent).join() === 'Prep,Install'`), 'grouped by phase');
@@ -126,7 +127,7 @@ try {
   ok(b.startOn === plus(today, 2) && b.due === plus(today, 4), 'pulling its start in starts it later: ' + [b.startOn, b.due]);
   await shot('cv-timeline');
   // Calendar.
-  await A.ev(`${T('.cc-wview [data-wv=calendar]')}.click(); true`);
+  await A.pick(T('.cc-wview-sel'), 'calendar');
   const cDue = (await task(C0.id)).due;
   ok(await A.until(`!!${T('.ccc')}`), 'Calendar: the month');
   for (let i = 0; i < 3 && !(await A.ev(`!!${T(`.ccc-day[data-day="${cDue}"]:not(.other)`)}`)); i++) { await A.ev(`${T('.ccc-next')}.click(); true`); await sleep(200); }
@@ -145,7 +146,7 @@ try {
   // From the live check (column-a9, 2026-11-20): while someone types, work arriving from others holds the page's redraw
   // until they leave the field. Pressing a button used to redraw it before the click landed, losing what was typed.
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
-  await A.ev(`${T('.cc-tab[data-ctab=activity]')}.click(); true`);
+  await A.ev(`${T('.cc-tab[data-ctab=progress]')}.click(); true`);
   await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === 'Log a call or email')`);
   await A.ev(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === 'Log a call or email').click(); true`);
   await A.until(`!!${T('.log-contact')}`);
@@ -158,17 +159,19 @@ try {
   let att = [];
   for (let i = 0; i < 30 && !att.length; i++) { await sleep(150); att = (await api('GET', '/state')).attempts.filter((x) => x.campaignId === camp.id); }
   ok(att.length === 1 && /Old Town Shades/.test(JSON.stringify(att[0])), 'clicking an outcome with the mouse saves the call with its name: ' + JSON.stringify(att.map((x) => x.contact || x.who)));
-  // A task added in a phase (Overview's Add task, picked from its tile) shows at once, and the field stays ready.
-  await A.tap(T('.cc-tab[data-ctab=overview]'));
+  // A task added in a phase (Plan's Add task, picked from the phase's header) shows at once, and the field stays ready.
+  await A.tap(T('.cc-tab[data-ctab=plan]'));
   const addQ = `document.querySelector('#camps .cc-ov .cc-ppanel .cc-pp-name')`;
-  await A.tap(`document.querySelector('#camps .cc-ov .cc-ptile.phase[data-phase="${prep.id}"]')`);
+  await A.tap(`document.querySelector('#camps .cc-phase[data-phase="${prep.id}"] .cc-phase-t')`);
   await A.until(`document.activeElement === ${addQ}`);
   await A.cmd('Input.insertText', { text: 'Measure the windows' });
   await A.ev(`${addQ}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); true`);
-  ok(await A.until(`document.querySelector('#camps .cc-ov .cc-pt-phase[data-id="${prep.id}"]')?.textContent.includes('Measure the windows')`, 5000), 'a task added in a phase shows right away');
+  ok(await A.until(`document.querySelector('#camps .cc-phase[data-phase="${prep.id}"]')?.textContent.includes('Measure the windows')`, 5000), 'a task added in a phase shows right away');
   ok(await A.until(`document.activeElement === ${addQ} && !${addQ}.value`, 3000), 'and the add field still has the cursor');
   // The builder's last stage has no stray "null" where Next would be.
-  await A.ev(`${T('.cc-edit')}.click(); true`);
+  await A.ev(`${T('[aria-label="Campaign options"]')}.click(); true`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Edit details'))`);
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Edit details')).click(); true`);
   await A.until(`!!document.querySelector('.cb-stage[data-stage="3"]')`);
   await A.ev(`document.querySelector('.cb-stage[data-stage="3"]').click(); true`);
   ok(await A.until(`!!document.querySelector('.cb-stage-nav .cb-back')`) && !/null/.test(await A.ev(`document.querySelector('.cb-stage-nav').textContent`)), 'the builder’s last stage shows Back and nothing else: ' + await A.ev(`document.querySelector('.cb-stage-nav').textContent`));
@@ -176,10 +179,10 @@ try {
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   const X0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Pick up the brackets' });
   const Y0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Mount the brackets', blockedBy: [X0.id] });
-  await A.tap(T('.cc-tab[data-ctab=work]'));
-  await A.until(`!!${T('.cc-wview [data-wv=list]')}`);
-  await A.tap(T('.cc-wview [data-wv=list]'));
-  await A.tap(T('.cc-wf [data-wf=all]'));
+  // Right after the builder closes; tap again if the first tap landed while it was still going.
+  for (let i = 0; i < 3 && !(await A.ev(`!!${T('.cc-wview-sel')}`)); i++) { await A.tap(T('.cc-tab[data-ctab=work]')); await A.until(`!!${T('.cc-wview-sel')}`, 4000); }
+  await A.pick(T('.cc-wview-sel'), 'list');
+  await A.tap(T('.cc-chip[data-chip=all]'));
   await A.until(`!!${T(`.cc-tr[data-task="${Y0.id}"]`)}`, 8000);
   for (let i = 0; i < 4 && !(await A.ev(`document.querySelector('#sheet .td')?.dataset.task === ${JSON.stringify(Y0.id)}`)); i++) { await A.ev(`${T(`.cc-tr[data-task="${Y0.id}"]`)}.click(); true`); await sleep(400); }
   ok(await A.until(`document.querySelector('#sheet button.td-dep')?.textContent.includes('Pick up the brackets')`), 'a waiting task’s drawer shows what it waits for, as a button');

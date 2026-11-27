@@ -39,8 +39,10 @@ try {
   const join = async (name, n) => call((await call()('POST', '/auth', { mode: 'join', workspace: 'Shade ' + t, code, name, email: `${name.toLowerCase()}${t}@t.test`, password: 'longenough' + n, device: 'Mac', deviceId: 'd' + n })).body.token);
   const sam = await join('Sam', 2);
   const ann = await join('Ann', 3);
+  const kim = await join('Kim', 4); // an admin: members can't touch price lines (docs/jobflows/PRICES.md), so an admin's discount is the one that needs the owner's OK
   const ids = (await jo('GET', '/state')).body.workspace.members;
   await jo('PATCH', '/members/' + ids.find((x) => x.name === 'Ann').id, { role: 'admin' });
+  await jo('PATCH', '/members/' + ids.find((x) => x.name === 'Kim').id, { role: 'admin' });
   await jo('PATCH', '/workspace', { tools: { projects: true } });
   const p = (await jo('POST', '/projects', { template: 'trades', trades: ['blinds'] })).body;
   const tp = p.types[0];
@@ -49,7 +51,7 @@ try {
   const job = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Ruiz shutters', price: lines(0) } })).body;
   const disc = async (who) => (await who('GET', `/projects/${p.id}/records`)).body.find((x) => x.id === job.id)?.values[priceId]?.discount?.value || 0;
 
-  r = await sam('PATCH', '/records/' + job.id, { values: { [priceId]: lines(15) } });
+  r = await kim('PATCH', '/records/' + job.id, { values: { [priceId]: lines(15) } });
   ok(r.status === 200 && (await disc(jo)) === 15, 'with no rules, anyone can give a discount (nothing changes until an owner sets one)');
   await jo('PATCH', '/records/' + job.id, { values: { [priceId]: lines(0) } });
 
@@ -60,28 +62,28 @@ try {
   ok((await sam('GET', '/rules')).body.rules.discount.level === 'approval', 'everyone can see the rules');
 
   // A discount over the line is held.
-  r = await sam('PATCH', '/records/' + job.id, { values: { [priceId]: lines(20) } });
-  ok(r.status === 202 && r.body.pending && /needs an OK first/.test(r.body.error) && /Jo/.test(r.body.error), 'Sam’s 20% discount is held, and he’s told it went to Jo: ' + r.body.error);
+  r = await kim('PATCH', '/records/' + job.id, { values: { [priceId]: lines(20) } });
+  ok(r.status === 202 && r.body.pending && /needs an OK first/.test(r.body.error) && /Jo/.test(r.body.error), 'Kim’s 20% discount is held, and she’s told it went to Jo: ' + r.body.error);
   ok((await disc(jo)) === 0, 'nothing changed yet');
   const ask1 = r.body.approval;
-  ok(ask1.summary.includes('20% discount on Ruiz shutters') && ask1.by === 'Sam', 'the request says what it is');
-  ok((await jo('GET', '/notices')).body.some((n) => n.kind === 'approval' && /Sam needs your OK/.test(n.title)), 'Jo hears about it');
-  ok((await sam('PATCH', '/records/' + job.id, { values: { [priceId]: lines(8) } })).status === 200 && (await disc(jo)) === 8, 'a discount under the line goes straight through');
+  ok(ask1.summary.includes('20% discount on Ruiz shutters') && ask1.by === 'Kim', 'the request says what it is');
+  ok((await jo('GET', '/notices')).body.some((n) => n.kind === 'approval' && /Kim needs your OK/.test(n.title)), 'Jo hears about it');
+  ok((await kim('PATCH', '/records/' + job.id, { values: { [priceId]: lines(8) } })).status === 200 && (await disc(jo)) === 8, 'a discount under the line goes straight through');
   ok((await jo('PATCH', '/records/' + job.id, { values: { [priceId]: lines(30) } })).status === 200 && (await disc(jo)) === 30, 'owners can always do it themselves');
   await jo('PATCH', '/records/' + job.id, { values: { [priceId]: lines(8) } });
-  ok((await sam('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Big discount job', price: lines(50) } })).status === 202, 'a new job made with a big discount is held too');
+  ok((await kim('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Big discount job', price: lines(50) } })).status === 202, 'a new job made with a big discount is held too');
 
   // Approving lands it exactly as asked.
-  ok((await sam('POST', `/approvals/${ask1.id}/approve`)).status === 403 && (await ann('POST', `/approvals/${ask1.id}/approve`)).status === 403, 'Sam can’t approve his own, and admins can’t when only owners approve');
+  ok((await kim('POST', `/approvals/${ask1.id}/approve`)).status === 403 && (await ann('POST', `/approvals/${ask1.id}/approve`)).status === 403, 'Kim can’t approve her own, and admins can’t when only owners approve');
   r = await jo('GET', '/approvals');
   ok(r.body.canApprove && r.body.approvals.filter((x) => x.status === 'pending').length === 2, 'Jo sees what’s waiting');
   ok((await sam('GET', '/approvals')).body.approvals.every((x) => x.by === 'Sam') && (await ann('GET', '/approvals')).body.approvals.length === 0, 'others see only their own requests');
   r = await jo('POST', `/approvals/${ask1.id}/approve`);
-  ok(r.status === 200 && r.body.approval.status === 'approved' && (await disc(jo)) === 20, 'Jo approves: the 20% discount lands, as Sam asked');
+  ok(r.status === 200 && r.body.approval.status === 'approved' && (await disc(jo)) === 20, 'Jo approves: the 20% discount lands, as Kim asked');
   ok((await jo('POST', `/approvals/${ask1.id}/approve`)).status === 409, 'it can’t be approved twice');
-  ok((await sam('GET', '/notices')).body.some((n) => /Jo approved your request/.test(n.title)), 'Sam hears it was approved');
+  ok((await kim('GET', '/notices')).body.some((n) => /Jo approved your request/.test(n.title)), 'Kim hears it was approved');
   const log = (await jo('GET', `/records/${job.id}/log`)).body;
-  ok(JSON.stringify(log).includes('Sam'), 'the change is Sam’s in the job’s history');
+  ok(JSON.stringify(log).includes('Kim'), 'the change is Kim’s in the job’s history');
 
   // Declining, and deleting.
   r = await sam('DELETE', '/records/' + job.id);
@@ -114,7 +116,7 @@ try {
   const inv2 = (await ann('POST', `/records/${job3.id}/invoices`)).body;
   ok((await ann('POST', `/invoices/${inv2.id}/send`)).status === 200, 'when admins can approve, Ann sends it herself');
   r = await sam('PATCH', '/records/' + job3.id, { values: { [priceId]: lines(25) } });
-  ok(r.status === 202 && (await ann('POST', `/approvals/${r.body.approval.id}/approve`)).body.approval.status === 'approved', 'and Ann can approve Sam’s discount');
+  ok(r.status === 403 && /owners and admins/.test(r.body?.error || ''), 'a member can’t give a discount at all: prices are for owners and admins');
 
   // The AI hears the rules.
   await jo('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });

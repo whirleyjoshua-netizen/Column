@@ -2,6 +2,7 @@
 // real work (complete, phases, tasks, blocked, overdue); five tabs (Overview, Plan, Work, Resources, Activity); the brief
 // in four parts, edited in place; phases (the steps) as connected cards; Work as one table with filters; a Pulse panel
 // with what to do next, each with its button. Every part of the old page is still in one of the tabs.
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -15,8 +16,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-ccui`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-ccui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-ccui`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 async function tab(url) {
   let t;
@@ -37,7 +38,6 @@ async function tab(url) {
 let A;
 const T = (sel) => `document.querySelector('#camps ${sel}')`;
 const tabTo = async (k) => { await A.ev(`${T(`.cc-tab[data-ctab=${k}]`)}.click(); true`); await A.until(`${T('.cc-body')}?.dataset.tab === '${k}'`); };
-const kpi = (cls) => A.ev(`${T(`.cc-kpi.${cls} b`)}?.textContent`);
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(APP + 'api/health')).ok) break; } catch {} await sleep(150); }
   const t = Date.now();
@@ -63,25 +63,25 @@ try {
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!!document.querySelector('.camp-card')`);
   await A.tap(`document.querySelector('.camp-card')`);
-  ok(await A.until(`!!${T('.cc-kpis')}`), 'a campaign opens as the Command Center');
+  ok(await A.until(`!!${T('.cc-chips')}`), 'a campaign opens');
   ok(await A.ev(`${T('.cc-name')}.textContent === 'New Client Onboarding' && !!${T('.cc-title-row .health')} && ${T('.cc-owner')}.textContent.includes('You') && ${T('.cc-crumb')}.textContent.startsWith('Campaigns')`), 'header: name, health, owner, breadcrumb');
-  ok(await kpi('phases') === '4' && await kpi('tasks') === '10' && await kpi('blocked') === '1' && await kpi('overdue') === '1', `KPIs from the real work: 4 phases, 10 tasks, 1 blocked, 1 overdue (${await kpi('phases')}/${await kpi('tasks')}/${await kpi('blocked')}/${await kpi('overdue')})`);
-  ok(await A.ev(`${T('.cc-kpi.overdue')}.classList.contains('bad') && ${T('.cc-kpi.blocked')}.classList.contains('bad')`), 'blocked and overdue are flagged');
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Overview|Plan|Work|Resources|Activity|Report', 'six tabs: Overview, Plan, Work, Resources, Activity, Report');
+  // The numbers left the header for one line of chips (2026-11-25): how complete it is, then All, My tasks, Overdue, Blocked.
+  ok(await A.ev(`/^[0-9]+% complete/.test(${T('.cc-chips')}.textContent) && ${T('.cc-chip[data-chip=overdue]')}.classList.contains('bad')`), 'the chips: how complete it is, overdue flagged');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-tab')].map((b) => b.textContent).join('|')`) === 'Plan|Work|Progress|Sketch', 'tabs: Plan, Work, Progress, and Sketch on a wide screen');
   // The brief, in four parts.
-  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-obrief h4')].map((x) => x.textContent).join('|')`) === 'Objective|Audience|Strategy|Success metrics', 'the brief, down the left: Objective, Audience, Strategy, Success metrics');
+  ok(await A.ev(`[...document.querySelectorAll('#camps .cc-obrief h4')].map((x) => x.textContent).join('|')`) === 'Objective|Audience|Strategy|Success metrics|Where things are', 'the brief, down the left: Objective, Audience, Strategy, Success metrics, and where things are');
   ok(await A.ev(`${T('.cc-bf[data-field=brief]')}.textContent.includes('installed customers') && ${T('.cc-bf[data-field=audience]')}.textContent === 'New valley homeowners' && ${T('.cc-metrics')}.textContent.includes('Consultations booked') && ${T('.cc-metrics')}.textContent.includes('0 / 20')`), 'filled from the campaign; a target (0 / 20) is a success metric');
   await A.tap(T('.cc-bf[data-field=audience]'));
   await A.until(`document.activeElement?.classList.contains('cc-bf-edit')`);
   await A.ev(`(() => { const ta = document.activeElement; ta.value = 'New valley homeowners and landlords'; ta.blur(); })()`);
   ok(await (async () => { for (let i = 0; i < 30; i++) { if ((await api('GET', '/state')).campaigns.find((x) => x.id === camp.id)?.audience === 'New valley homeowners and landlords') return true; await sleep(100); } return false; })(), 'Audience is edited in place and saved');
-  // Phases as the Plan's tree of tiles (2026-11-23); the target on the right, under At a glance.
-  ok(await A.ev(`document.querySelectorAll('#camps .cc-ov .cc-ptile.phase').length === 4 && ${T('.cc-ov .cc-ptile.phase small')}.textContent.startsWith('1 of 4 tasks') && document.querySelectorAll('#camps .cc-ov .cc-pt-phase')[0].querySelectorAll('.cc-ttile').length === 4`), 'four phase tiles, each with its tasks under it; the first: 1 of 4 tasks');
+  // Phases as cards with their tasks as rows (2026-11-25); the target on the right, under At a glance.
+  ok(await A.ev(`document.querySelectorAll('#camps .cc-phase').length === 4 && ${T('.cc-phase .cc-phase-meta')}.textContent === 'Phase 1 (1/4 tasks done)' && document.querySelectorAll('#camps .cc-phase')[0].querySelectorAll('.cc-row').length === 4`), 'four phase cards, each with its tasks as rows; the first: Phase 1 (1/4 tasks done)');
   ok(await A.ev(`document.querySelectorAll('#camps .cc-oidle .goal').length === 1 && ${T('.cc-oidle .goal')}.textContent.includes('Consultations booked')`), 'the target sits in At a glance, with its numbers');
-  // Work: one table, with filters; a row opens the task.
+  // Work: one table, filtered by the chips (2026-11-25); a row opens the task.
   await tabTo('work');
-  ok(await A.ev(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 9`), 'Work lists the 9 open tasks');
-  await A.ev(`${T('.cc-wf [data-wf=blocked]')}.click(); true`);
+  ok(await A.ev(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 10 && document.querySelectorAll('#camps .cc-tr.done').length === 1`), 'Work lists all 10 tasks (All: the 9 open, then the done one)');
+  await A.ev(`${T('.cc-chip[data-chip=blocked]')}.click(); true`);
   ok(await A.until(`[...document.querySelectorAll('#camps .cc-tr:not(.cc-th) .cc-tt')].map((x) => x.textContent).join() === 'Email consultation confirmation' && ${T('.cc-status.wait')}`), 'Blocked shows the one waiting task, marked Waiting');
   await A.tap(T('.cc-tr:not(.cc-th)'));
   ok(await A.until(`!!document.querySelector('#sheet .task-win')`), 'a row opens the task beside the page');
@@ -89,8 +89,8 @@ try {
   ok(await A.ev(`[...document.querySelectorAll('#sheet .td-row .td-l')].map((x) => x.textContent).join('|') === 'Assignee|Starts|Due|Priority|Status' && [...document.querySelectorAll('#sheet .td-sec-h')].map((x) => x.textContent.split(' ·')[0]).join('|').startsWith('Description|Checklist|Subtasks|Dependencies')`), 'the drawer: Assignee, Starts, Due, Priority, Status, then Description, Checklist, Subtasks, Dependencies…');
   ok(await A.ev(`!!document.querySelector('#sheet .td-badge.wait') && document.querySelector('#sheet .td-status [data-st=doing]').disabled && document.querySelector('#sheet .td-dep')?.textContent.includes('Call new leads')`), 'a waiting task says Waiting, can’t be started, and shows what it waits for');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
-  await A.ev(`${T('.cc-wf [data-wf=open]')}.click(); true`);
-  await A.until(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 9`);
+  await A.ev(`${T('.cc-chip[data-chip=all]')}.click(); true`);
+  await A.until(`document.querySelectorAll('#camps .cc-tr:not(.cc-th)').length === 10`);
   await A.tap(`[...document.querySelectorAll('#camps .cc-tr:not(.cc-th)')].find((r) => r.textContent.includes('Measure windows'))`);
   await A.until(`!!document.querySelector('#sheet .td-status')`);
   await A.tap(`document.querySelector('#sheet .td-status [data-st=doing]')`);
@@ -118,25 +118,23 @@ try {
   ok(await A.until(`document.querySelector('#sheet .win-title')?.value === 'Measure windows (copy)'`), 'Duplicate makes a copy and opens it');
   ok(await A.until(`(async () => (await (await fetch('/api/state', { headers: { authorization: 'Bearer ' + JSON.parse(localStorage.getItem('column.token')) } })).json()).tasks.find((x) => x.text === 'Measure windows (copy)')?.checklist?.every((x) => !x.done))()`), 'with its checklist, unticked');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
-  // Plan, Resources, Activity keep the old page's parts.
+  // Plan (with what Resources had, under the brief) and Activity keep the old page's parts.
   await tabTo('plan');
-  ok(await A.ev(`!!${T('.cc-planner')} && document.querySelectorAll('#camps .cc-ptile.phase').length === 4`), 'Plan: the planner, with the four phases (since 2026-11-22; the target and the team are on Overview)');
-  await tabTo('resources');
-  ok(await A.ev(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files')) && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Notes')) && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('#'))`), 'Resources: the feed, Files and Notes');
-  await tabTo('activity');
+  ok(await A.ev(`!!${T('.cc-planner')} && document.querySelectorAll('#camps .cc-phase').length === 4`), 'Plan: the four phases');
+  ok(await A.ev(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Files')) && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Notes')) && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('#'))`), 'under the brief: the feed, Files and Notes');
+  await tabTo('progress');
   ok(await A.ev(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === 'Log a call or email') && [...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Write a report')) && [...document.querySelectorAll('#camps .cc-hist-row')].some((x) => x.textContent.includes('Pull last month’s leads'))`), 'Activity: the log, Write a report, and what was recently done');
-  // Pulse: from its button (2026-11-22).
-  await A.ev(`${T('.cc-pulse-btn')}.click(); true`);
-  await A.until(`!!document.querySelector('#camps .cc-pulse')`);
-  ok(await A.ev(`${T('.cc-pulse')}.textContent.includes('Blockers') && [...document.querySelectorAll('#camps .cc-idea p')].some((p) => p.textContent.includes('nobody on them'))`), 'Pulse: blockers, overdue, and what to do next');
+  // How it's going and what to do next head Progress (2026-11-25); blockers are in its numbers.
+  await A.until(`!!document.querySelector('#camps .ccp-health')`);
+  ok(await A.ev(`[...document.querySelectorAll('#camps .ccr-top .ccr-stat small')].some((x) => x.textContent === 'Blocked') && [...document.querySelectorAll('#camps .cc-idea p')].some((p) => p.textContent.includes('nobody on them'))`), 'Progress: blockers, overdue, and what to do next');
   await A.ev(`[...document.querySelectorAll('#camps .cc-idea')].find((x) => x.textContent.includes('nobody on them')).querySelector('button').click(); true`);
   ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'work'`), '“Assign them” takes you to the work');
-  // A phone: no pulse, nothing sideways.
+  // A phone: nothing sideways.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 400, height: 860, deviceScaleFactor: 2, mobile: true });
   await sleep(300);
-  await A.ev(`${T('.cc-tab[data-ctab=overview]')}.click(); true`);
+  await A.ev(`${T('.cc-tab[data-ctab=plan]')}.click(); true`);
   await sleep(400);
-  ok(await A.ev(`!${T('.cc-pulse')} && !!${T('.cc-kpis')} && document.documentElement.scrollWidth <= innerWidth`), 'on a phone: the KPIs, no pulse, nothing spills sideways');
+  ok(await A.ev(`!!${T('.cc-chips')} && !!${T('.cc-phase')} && document.documentElement.scrollWidth <= innerWidth`), 'on a phone: the chips and phases, nothing spills sideways');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

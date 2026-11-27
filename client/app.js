@@ -221,6 +221,34 @@
     }
     return data;
   }
+  // ---------- nothing goes to a customer without an OK (docs/jobflows/PHASE3B.md §1) ----------
+  // A send route first answers 428 with what would go and a one-time ticket: this shows it (who, how, the subject and
+  // the words) with Send and Cancel, and only Send calls again with the ticket. Changed in between (409 with a new
+  // preview): it shows the new one. Resolves with the route's answer, or null when the person cancels.
+  function sendOk(method, path, body = {}) {
+    const ask = (pv, tk, note) => new Promise((resolve, reject) => {
+      const via = pv.via === 'both' ? 'email and text' : pv.via === 'text' ? 'text' : 'email';
+      const where = [pv.email, pv.phone].filter(Boolean).join(' · ');
+      const go = h('button', { class: 'btn primary-btn', onclick: async () => {
+        go.disabled = true;
+        try { const out = await api(method, path, { ...body, confirm: tk }); closeSheet(); resolve(out); }
+        catch (e) {
+          if (e.status === 409 && e.data?.confirm) return ask(e.data.preview, e.data.confirm, e.data.error).then(resolve, reject);
+          closeSheet();
+          if (e.status === 409 && e.data?.sent) return resolve({ alreadySent: true });
+          reject(e);
+        }
+      } }, 'Send');
+      sheet('Check it before it goes', [h('div', { class: 'send-ok' },
+        note ? h('p', { class: 'day-hint' }, note) : null,
+        h('p', { class: 'send-to' }, `Send to ${pv.to} by ${via}?`, where ? h('small', {}, ` ${where}`) : null),
+        pv.subject ? h('p', { class: 'send-subj' }, h('b', {}, pv.subject)) : null,
+        h('div', { class: 'send-text' }, pv.text || ''),
+        pv.textMessage ? h('p', { class: 'day-hint' }, 'The text says: ' + pv.textMessage) : null,
+        h('div', { class: 'btns' }, go, h('button', { class: 'btn', onclick: () => { closeSheet(); resolve(null); } }, 'Cancel')))]);
+    });
+    return api(method, path, body).catch((e) => { if (e.status === 428 && e.data?.confirm) return ask(e.data.preview, e.data.confirm); throw e; });
+  }
 
   // ---------- teams on this device ----------
   // Each team signed in here keeps its token, so switching is a tap. Switching reloads the page,
@@ -583,6 +611,8 @@
     } else if (msg.type === 'payments') {
       S.payments = msg.payments;
       $('#settings .pay-sec, #apps .pay-sec')?.replaceWith(paySection());
+    } else if (msg.type === 'jobrun') {
+      jbRunNews(msg);
     } else if (msg.type === 'visits') {
       PR.visits.set(msg.recordId, msg.visits);
       teamSoon();
@@ -3183,15 +3213,17 @@
   // Company HQ, Business card and Signatures are in Settings → Business. News is on Home (turned on in Settings).
   // Sidekick's panel (the owner, 2026-11-14): one assistant on every page. See "Sidekick, on every page".
   const SKD = { open: false, view: 'home', draft: '', busy: false, noPage: false, here: false };
-  // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks.
-  const MAIN_TABS = ['agents', 'work', 'apps'];
+  // Chat moved into Tools (the owner, 2026-11-20): it opens in the split beside the page, like Stacks. And back in the
+  // sidebar too (the owner, 2026-11-25: "move chat to the main left tab ... still ... open in the split screen through
+  // tools"): the sidebar's Chat is the page, Tools → Chat the split.
+  const MAIN_TABS = ['chat', 'agents', 'work', 'apps'];
   // Tasks (the owner, 2026-11-15): what was Day is Workspace's first tab, and Workspace always opens on it.
-  const WORK_TABS = ['day', 'contacts', 'projects', 'camps', 'docs', 'automations', 'tools'];
+  const WORK_TABS = ['day', 'contacts', 'jobs', 'projects', 'camps', 'docs', 'automations', 'tools'];
   // What Workspace → Tools lists. Stacks is a view (S.tab 'column'); the rest open in #tool. While one is open, Tools stays lit.
   const TOOL_PAGE = ['chat', 'column', 'whiteboard', 'templates', 'inventory', 'bills', 'analytics', 'email', 'meetings', 'map', 'vault'];
   const BAR_ITEMS = {
     column: { label: 'Stacks', view: true },
-    chat: { label: 'Chat', view: true },
+    chat: { label: 'Chat', view: true, ok: () => memberMay('chat') },
     camps: { label: 'Campaigns', view: true, ok: () => memberMay('camps') },
     agents: { label: 'Agents', ok: () => toolOn('agents'), open: () => agOpen('team') },
     work: { label: 'Workspace', ok: () => workKeys().length > 0, open: () => openBarItem('day') },
@@ -3202,6 +3234,8 @@
     // Docs and Folders are the same things (a doc is an item, and folders hold items): one tab, a switch between them.
     docs: { label: 'Folders & Docs', ok: () => (toolOn('docs') || toolOn('folders')) && memberMay('docs'), open: () => docsHome(), on: () => toolOpen === 'docs' || toolOpen === 'folders' },
     projects: { label: 'Boards', ok: () => toolOn('projects') && memberMay('projects'), open: () => showProjects() },
+    // Jobs (the owner, 2026-11-24): every job and the job flows they run on, a tab of its own beside Boards.
+    jobs: { label: 'Jobs', ok: () => toolOn('projects') && memberMay('projects'), open: () => { if (JB.jobs) jbLoad(true); openTool('jobs'); } }, // shown at once, refreshed behind
     // Automations (the owner, 2026-11-14): something you build and watch, so it's in Workspace, not Settings. Owners and admins.
     automations: { label: 'Automations', ok: () => amAdmin() },
     // Tools (the owner, 2026-11-16): at the far right of the strip; it opens the split on the right, beside the page.
@@ -3250,6 +3284,7 @@
     projects: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
     bills: svg('<path d="M12 3v18M16.5 7.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3S9.5 10.5 12 11s4.5 1.3 4.5 3.5-2 3-4.5 3-4.5-1.3-4.5-3"/>'),
     contacts: svg('<circle cx="12" cy="9" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>'),
+    jobs: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 12h18"/>'),
     email: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>'),
     folders: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
     meetings: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
@@ -3283,7 +3318,7 @@
     }
     if (it.view) {
       closeProjects();
-      return setTab(k);
+      return setTab(k, 'page');
     }
     if (toolOpen === k) return closeTool();
     it.open ? it.open() : openTool(k);
@@ -3486,13 +3521,15 @@
     });
   }
 
-  // Chat showing: in the split (2026-11-20), or the old page if anything still sets it.
+  // Chat showing: as the page (the sidebar's Chat) or in the split (Tools → Chat).
   const chatOn = () => S.tab === 'chat' || splitOpen === 'chat';
   // The pages you've been on, for the browser's Back (navBack, near the end).
   const NAVB = { tabs: [], going: false, armed: false, skip: false };
-  function setTab(tab) {
-    // Everything that opened the Chat page (links, pins, notifications) opens Chat in the split now.
-    if (tab === 'chat') return openChat();
+  function setTab(tab, how) {
+    // Links, pins and notifications open Chat in the split beside the page you're on (or on the Chat page, if that's
+    // where you are); the sidebar's Chat (how 'page') makes it the page, taking it back from the split.
+    if (tab === 'chat' && how !== 'page') return openChat();
+    if (tab === 'chat' && splitOpen === 'chat') closeSplit();
     if (S.tab && tab !== S.tab && !NAVB.going) { NAVB.tabs.push(S.tab); if (NAVB.tabs.length > 30) NAVB.tabs.shift(); }
     if (tab === 'camps' && splitOpen === 'camps') closeSplit(); // Campaigns from the tabs: back from the split, as the page
     S.tab = tab;
@@ -3507,7 +3544,8 @@
     const panesWere = $('#panes').classList.contains('hidden');
     $('#panes').classList.toggle('hidden', tab !== 'column' && splitOpen !== 'column');
     if (panesWere && tab === 'column') keepPanesScroll($('#panes'), true);
-    $('#chat').classList.toggle('hidden', splitOpen !== 'chat');
+    $('#chat').classList.toggle('hidden', tab !== 'chat' && splitOpen !== 'chat');
+    if (tab === 'chat') openChannel(C.view);
     $('#campsWrap').classList.toggle('hidden', tab !== 'camps' && splitOpen !== 'camps');
     if (tab === 'camps') renderCamps();
     if (tab === 'day') renderDay();
@@ -5730,6 +5768,82 @@
   // Who may pick which (the server checks the same): billing and messaging customers are for owners and admins, the
   // business's money for owners.
   const autoDoOk = (k) => (k === 'money' ? amAdmin() : ['invoice', 'text', 'email', 'webhook', 'teams'].includes(k) ? amAdmin() : k === 'agent' ? toolOn('agents') : k === 'stock' ? toolOn('inventory') : true);
+  // How each step and trigger looks (2026-11-25, "smaller nodes, color, simple list"): an icon, a color, and the
+  // group it's listed under in the picker. c: purple teal blue green orange amber red pink gray (.lk-<c> in style.css).
+  const AUTO_LOOK = {
+    notify: { ic: '🔔', c: 'purple', g: 'people' }, post: { ic: '📣', c: 'teal', g: 'people' }, teams: { ic: '🟦', c: 'blue', g: 'people' },
+    task: { ic: '✅', c: 'purple', g: 'work' }, campaign: { ic: '🚀', c: 'orange', g: 'work' }, visit: { ic: '📅', c: 'blue', g: 'work' }, doc: { ic: '📝', c: 'orange', g: 'work' },
+    record: { ic: '✏️', c: 'gray', g: 'work' }, create: { ic: '➕', c: 'green', g: 'work' }, stock: { ic: '📦', c: 'amber', g: 'work' },
+    contact: { ic: '👤', c: 'pink', g: 'customers' }, email: { ic: '📧', c: 'red', g: 'customers' }, text: { ic: '📱', c: 'green', g: 'customers' },
+    invoice: { ic: '💳', c: 'teal', g: 'money' }, money: { ic: '💵', c: 'green', g: 'money' },
+    agent: { ic: '✨', c: 'purple', g: 'ai' }, webhook: { ic: '🔗', c: 'gray', g: 'ai' }, vault: { ic: '🔒', c: 'gray', g: 'ai' },
+    wait: { ic: '⏳', c: 'amber', g: 'flow' }, if: { ic: '🔀', c: 'teal', g: 'flow' },
+  };
+  const AUTO_GROUPS = [['all', 'All'], ['people', 'Tell people'], ['work', 'Work'], ['customers', 'Customers'], ['money', 'Money'], ['ai', 'AI & apps'], ['flow', 'Flow']];
+  // Steps in the order people reach for them most.
+  const AUTO_ORDER = ['notify', 'task', 'post', 'email', 'text', 'wait', 'if', 'contact', 'visit', 'invoice', 'campaign', 'doc', 'agent', 'record', 'create', 'money', 'stock', 'teams', 'webhook', 'vault'];
+  const AUTO_WHEN_LOOK = {
+    task: ['✅', 'orange'], step: ['🏁', 'orange'], campaign: ['🎯', 'orange'], contact: ['👤', 'pink'], attempt: ['📞', 'blue'], file: ['📥', 'teal'], document: ['✍️', 'purple'], doc: ['📝', 'purple'],
+    schedule: ['⏰', 'amber'], record: ['🗂', 'blue'], quote: ['📝', 'green'], invoice: ['💳', 'teal'], payment: ['💵', 'green'], money: ['💵', 'green'], price: ['🏷', 'green'], visit: ['🚚', 'blue'], booking: ['📅', 'blue'],
+    text: ['📱', 'green'], stock: ['📦', 'amber'], equipment: ['🛠', 'amber'], github: ['💻', 'gray'], companycam: ['📷', 'gray'], connection: ['🔌', 'red'], analytics: ['📈', 'teal'], pin: ['📍', 'red'],
+  };
+  const autoWhenLook = (kind) => { const l = AUTO_WHEN_LOOK[String(kind || '').split('.')[0]]; return l ? { ic: l[0], c: l[1] } : { ic: '⚡', c: 'gray' }; };
+  const autoLook = (kind) => AUTO_LOOK[kind] || { ic: '⚡', c: 'gray', g: 'work' };
+  const autoIc = (l) => h('span', { class: `auto-ic lk-${l.c}`, 'aria-hidden': 'true' }, l.ic);
+  // The picker: a search box, chips for each group, and a list with colored icons. items: { key, label, ic, c, g?, hint? }.
+  // Beside the button that opened it (a sheet at the bottom on a phone); Esc, a tap outside or a pick closes it.
+  function autoPicker(anchor, { title, items, groups = null, active = null, onPick, refocus = null }) {
+    const was = document.querySelector('.ap-pop');
+    if (was && was._anchor === anchor) return was._close(); // its button again: close it
+    was?._close?.();
+    const st = { q: '', g: 'all' };
+    const search = h('input', { class: 'ap-search', type: 'search', placeholder: 'Search…', 'aria-label': 'Search' });
+    const chips = groups ? h('div', { class: 'ap-chips', role: 'tablist' }) : null;
+    const list = h('div', { class: 'ap-list', role: 'listbox', 'aria-label': title });
+    const pop = h('div', { class: 'ap-pop', role: 'dialog', 'aria-label': title }, h('div', { class: 'ap-title' }, '✨ ' + title), search, chips, list);
+    const outside = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
+    const esc = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); anchor.focus?.(); } };
+    // A scroll under it (the page, the canvas) closes it rather than leave it floating away from its button.
+    const scrolled = (e) => { if (!pop.contains(e.target)) close(); };
+    // On a phone it's a sheet at the bottom: when the keyboard comes up it sits above it, and shrinks to fit.
+    const vv = window.visualViewport;
+    const fit = () => { pop.style.bottom = Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px'; pop.style.maxHeight = Math.round(vv.height * 0.8) + 'px'; };
+    const close = () => { pop.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc, true); document.removeEventListener('scroll', scrolled, true); vv?.removeEventListener('resize', fit); vv?.removeEventListener('scroll', fit); };
+    pop._close = close;
+    pop._anchor = anchor;
+    // After a pick the page redraws; the keyboard goes back to the button that opened it (or its new self).
+    const back = () => setTimeout(() => (anchor.isConnected ? anchor : refocus?.())?.focus({ preventScroll: true }));
+    const draw = () => {
+      const q = st.q.trim().toLowerCase();
+      const shown = items.filter((x) => (st.g === 'all' || x.g === st.g) && (!q || (x.find || x.label).toLowerCase().includes(q) || (x.hint || '').toLowerCase().includes(q)));
+      chips?.replaceChildren(...groups.filter(([k]) => k === 'all' || items.some((x) => x.g === k)).map(([k, l]) =>
+        h('button', { type: 'button', class: 'ap-chip' + (st.g === k ? ' on' : ''), 'data-g': k, role: 'tab', 'aria-selected': String(st.g === k), onclick: () => { st.g = k; draw(); } }, l)));
+      list.replaceChildren(...(shown.length ? shown.map((x) => h('button', { type: 'button', class: `ap-item lk-${x.c}` + (x.key === active ? ' on' : ''), 'data-key': x.key, role: 'option', 'aria-selected': String(x.key === active), onclick: () => { close(); onPick(x.key); back(); } },
+        h('span', { class: 'ap-ic', 'aria-hidden': 'true' }, x.ic), h('span', { class: 'ap-label' }, x.label, x.hint ? h('small', {}, x.hint) : null), x.key === active ? h('small', { class: 'ap-on' }, 'Active') : null))
+        : [h('p', { class: 'ap-none' }, 'Nothing matches.')]));
+    };
+    search.addEventListener('input', () => { st.q = search.value; draw(); });
+    draw();
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect(), w = pop.offsetWidth, ht = pop.offsetHeight;
+    if (innerWidth > 700) {
+      const left = r.right + 8 + w <= innerWidth ? r.right + 8 : r.left - w - 8 >= 8 ? r.left - w - 8 : Math.max(8, innerWidth - w - 8);
+      pop.style.left = left + 'px';
+      pop.style.top = Math.max(8, Math.min(r.top, innerHeight - ht - 8)) + 'px';
+    } else {
+      pop.classList.add('ap-sheet');
+      if (vv) { fit(); vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); }
+    }
+    const sheetMode = pop.classList.contains('ap-sheet');
+    setTimeout(() => { document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', esc, true); if (!sheetMode) document.addEventListener('scroll', scrolled, true); });
+    // On a phone the keyboard would cover the list: the search waits to be tapped.
+    if (!sheetMode) search.focus({ preventScroll: true });
+  }
+  // The picker's lists: what can set one off (grouped by tool, from the catalog), and what a step can do.
+  const autoWhenItems = (only = null) => (AUTO_CAT.events ? AUTO_CAT.events.map((e) => ({ key: e.type, label: e.label.replace(/ \(.*\)$/, ''), find: e.label, hint: AUTO_CAT.tools[e.tool] || '', g: e.tool, ...autoWhenLook(e.type) }))
+    : Object.entries(AUTO_WHEN).map(([type, label]) => ({ key: type, label, g: 'x', ...autoWhenLook(type) }))).filter((x) => !only || only.includes(x.key));
+  const autoWhenGroups = () => (AUTO_CAT.events ? [['all', 'All'], ...Object.entries(AUTO_CAT.tools)] : null);
+  const autoDoItems = (cur, depth = 0) => AUTO_ORDER.filter((k) => (k === 'wait' || (k === 'if' ? depth < 3 : AUTO_DO[k] && (autoDoOk(k) || k === cur)))).map((k) => ({ key: k, label: k === 'wait' ? 'Wait a while' : k === 'if' ? 'Only if… (check something first)' : AUTO_DO[k], ...autoLook(k) }));
   // The fields an automation can set (the server checks the same): plain values, never price lines or files.
   const AUTO_SET_T = ['text', 'number', 'money', 'date', 'select', 'multi', 'checkbox', 'person', 'email', 'phone', 'url'];
   const AUTO_WORDS = {
@@ -5747,7 +5861,7 @@
     const dateF = t.kind === 'record.date' && projById(t.projectId)?.types.find((y) => y.id === t.typeId)?.fields.find((f) => f.id === t.fieldId);
     const when = t.kind === 'schedule' ? `Every ${t.slots?.[0] ? t.slots[0].days.map((d) => DOWS[d]).join(', ') + ' at ' + hhmm(t.slots[0].time) : '…'}`
       : t.kind === 'record.date' ? `${t.days ? `${plural(Math.abs(t.days), 'day')} ${t.days < 0 ? 'before' : 'after'}` : 'On'} ${dateF ? dateF.name : 'a date'} in ${projById(t.projectId)?.name || 'a project'}`
-      : (AUTO_WHEN[t.kind] || t.kind) + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
+      : (AUTO_WHEN[t.kind] || t.kind).replace(/ \(.*\)$/, '') + [t.projectId && projById(t.projectId) ? ` in ${projById(t.projectId).name}` : '', t.to ? ` to ${t.to}` : '', t.over ? ` over $${t.over}` : '', t.direction ? (t.direction === 'in' ? ' (money in)' : ' (money out)') : '', t.step ? ` (${t.task || (t.taskId && taskById(t.taskId)?.text) ? `“${t.task || taskById(t.taskId).text}” in ` : ''}${t.step})` : '', t.campaignId && campById(t.campaignId) ? ` in ${campById(t.campaignId).name}` : '', t.stage ? ` to ${stageLabel(t.stage)}` : '', t.outcome ? ` as ${t.outcome}` : '', t.statuses?.length ? ` (${t.statuses.map((v) => HEALTH_L[v]).join(' or ')})` : ''].join('');
     const said = (list) => list.map((a) => (a.kind === 'wait' ? `wait ${a.amount} ${a.unit}` : a.kind === 'if' ? `if ${a.when.map((c) => '{' + c.field + '}').join(' and ')}: ${said(a.then) || 'nothing'}${a.else?.length ? '; otherwise ' + said(a.else) : ''}` : (AUTO_DO[a.kind] || a.kind).toLowerCase())).join(', ');
     return `${when} → ${said(x.actions)}`;
   }
@@ -5878,6 +5992,7 @@
       const sw = h('input', { type: 'checkbox', checked: x.on, 'aria-label': x.on ? 'On' : 'Off' });
       sw.addEventListener('change', () => api('PATCH', '/automations/' + x.id, { on: sw.checked }).catch((e) => toast(e.message)));
       return h('div', { class: 'auto-row' + (x.on ? '' : ' off') + (autoFailing(x) ? ' failing' : '') },
+        autoIc(autoWhenLook(x.trigger.kind)),
         h('button', { class: 'auto-main', onclick: () => autoSheet(x) }, h('b', {}, x.name), h('small', {}, autoSummary(x)),
           h('small', { class: last && !last.ok ? 'err' : 'muted' }, last ? `${last.ok ? 'Ran' : 'Didn’t run'} ${ago(last.at)} · ${last.note}` : 'Hasn’t run yet', x.count ? ` · ${plural(x.count, 'run')} in all` : ''),
           x.waiting ? h('small', { class: 'auto-waiting' }, `⏳ ${plural(x.waiting, 'run')} waiting`) : null,
@@ -5898,7 +6013,7 @@
       h('div', { class: 'any-h camp-goals-h' }, all.length ? 'More ideas' : 'Start from one of these'),
       h('div', { class: 'auto-recipe-for seg-chips', role: 'tablist' }, [[null, S.workspace?.setup?.kind && AUTO_FOR[S.workspace.setup.kind] ? `For you (${AUTO_FOR[S.workspace.setup.kind]})` : 'Suggested'], ...Object.entries(AUTO_FOR), ['every', 'All']].map(([k, label]) =>
         h('button', { class: 'chip' + (autoRecipeView.on === k ? ' on' : ''), 'data-for': k || 'you', role: 'tab', 'aria-selected': String(autoRecipeView.on === k), onclick: () => { autoRecipeView.on = k; renderAutos(); } }, label))),
-      h('div', { class: 'auto-recipes' }, autoRecipesFor(autoRecipeView.on).map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('b', {}, r.name), h('small', {}, r.why), h('small', { class: 'auto-recipe-steps' }, autoRecipeSteps(r))))),
+      h('div', { class: 'auto-recipes' }, autoRecipesFor(autoRecipeView.on).map((r) => h('button', { class: 'auto-recipe', onclick: () => autoSheet(null, r) }, h('span', { class: 'auto-recipe-h' }, autoIc(autoWhenLook(r.trigger.kind)), h('b', {}, r.name)), h('small', {}, r.why), h('small', { class: 'auto-recipe-steps' }, autoRecipeSteps(r))))),
     ];
   }
   // The runs of one that are waiting, each to stop.
@@ -5933,8 +6048,21 @@
     if (a.kind === 'wait') return `Wait ${a.amount} ${a.unit}`;
     if (a.kind === 'if') return 'Only if ' + (a.when || []).map((c) => `{${c.field}} ${{ is: 'is', not: 'isn’t', contains: 'has', over: 'is over', under: 'is under', empty: 'is empty', set: 'is filled in' }[c.op] || c.op}${['set', 'empty'].includes(c.op) ? '' : ' ' + (c.value || '…')}`).join(' and ');
     if (a.kind === 'task' && a.presetId) { const y = presetById(a.presetId); return y?.kind === 'bundle' ? `Make the bundle: ${y.name} (${plural(y.steps.length, 'task')})` : `Make a task: ${y?.name || a.presetName || 'a saved task'}`; }
-    const said = a.text || a.subject || a.title || a.url || '';
+    const said = a.text || a.subject || a.title || a.ask || a.url || '';
     return (AUTO_DO[a.kind] || a.kind) + (said ? ': ' + said : '');
+  }
+  // What sets it off, as a sentence for its node; and a step's few chips (who, when, where).
+  // (autoSummary says the event plainly: "A contact is added", not "… (by hand, a lead form, a card, a text…)".)
+  const autoWhenText = (t) => autoSummary({ trigger: t, actions: [] }).replace(/ → $/, '');
+  function autoChips(a) {
+    const who = (v) => (v === 'who' ? 'Whoever set it off' : v === 'doers' ? 'Whoever it’s for' : v === 'owners' ? 'Owners' : v === 'admins' ? 'Owners and admins'
+      : String(v).startsWith('role:') ? 'Role: ' + ((S.workspace.roles || []).find((r) => 'role:' + r.id === v)?.name || '?') : (S.workspace.members || []).find((m) => m.id === v)?.name || '');
+    const out = [];
+    if (a.kind === 'task') { if (a.assignee) out.push(['👤', who(a.assignee)]); if (a.dueIn != null && a.dueIn !== '') out.push(['📅', Number(a.dueIn) ? `Due in ${plural(Number(a.dueIn), 'day')}` : 'Due the same day']); }
+    if (a.kind === 'notify') (a.to || []).slice(0, 3).forEach((v) => out.push(['🔔', who(v)]));
+    if (a.kind === 'post') out.push(['#', !a.channelId || a.channelId === 'same' ? 'The campaign’s feed' : a.channelId === 'general' ? 'general' : S.workspace.channels.find((c) => c.id === a.channelId)?.name || 'a channel']);
+    if (a.kind === 'email' || a.kind === 'text') out.push(['✋', 'Waits for an OK']);
+    return out.filter(([, l]) => l).map(([i, l]) => h('span', { class: 'an-chip' }, `${i} ${l}`));
   }
   // Make or change one, in the builder: the whole automation as a flow, filling the page beside the sidebar. What sets it off at the top,
   // then each step under it; "only if" splits into Then and Otherwise side by side. A + between steps adds one there,
@@ -5953,7 +6081,7 @@
     const stages = [...new Set((S.contacts || []).map((c) => c.stage).filter(Boolean))];
     const outcomes = [...new Set(S.campaigns.flatMap((c) => c.outcomes || []))];
     const people = S.workspace.members;
-    const B = { folded: new WeakSet(), lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
+    const B = { sel: 'trigger', shown: 'trigger', tab: 'set', panel: null, lit: null, would: null, test: null, run: '', focus: null, reg: null, drag: null };
     // Typing doesn't redraw, so the red marks and the count follow it here.
     const marks = () => {
       let n = 0;
@@ -5961,9 +6089,12 @@
         const p = el._step ? autoProblem(el._step) : '';
         if (p) n++;
         el.classList.toggle('bad', !!p);
-        const b = el.querySelector(':scope > .auto-act-h > .auto-bad');
+        const b = el.querySelector(':scope > .an-h .auto-bad');
         if (b) { b.hidden = !p; b.title = p; b.setAttribute('aria-label', p); }
+        if (el._step) { el.querySelector(':scope > .an-b .an-say').textContent = autoLine(el._step); el.querySelector(':scope > .an-b .an-chips')?.replaceChildren(...autoChips(el._step)); }
       }
+      const ts = box.querySelector('.auto-trigger .an-say');
+      if (ts) ts.textContent = autoWhenText(dr.trigger);
       const c = box.querySelector('.auto-probs');
       if (c) { c.hidden = !n; c.textContent = `${n} ${n === 1 ? 'step needs' : 'steps need'} something`; }
     };
@@ -5980,22 +6111,22 @@
       }
       draw();
     };
+    const panelBtn = () => box.querySelector('.ab-panel .ab-change');
     const clearLit = () => { Object.assign(B, { lit: null, would: null, test: null, run: '' }); draw(); };
     const draw = () => {
       const t = dr.trigger;
       B.reg = { lists: new Map(), nodes: new Map() };
-      const name = h('input', { value: dr.name, placeholder: 'e.g. Signed? Schedule the work' });
+      if (B.sel !== 'trigger' && !allSteps(dr.actions).includes(B.sel)) { B.sel = 'trigger'; B.tab = 'set'; }
+      B.panel = null;
+      const name = h('input', { class: 'auto-name', value: dr.name, placeholder: 'Name it, e.g. Signed? Schedule the work', 'aria-label': 'Name' });
       name.addEventListener('input', () => (dr.name = name.value));
-      const groups = AUTO_CAT.events ? Object.entries(AUTO_CAT.tools).map(([tool, label]) => [label, AUTO_CAT.events.filter((e) => e.tool === tool)]).filter(([, l]) => l.length) : [['', Object.entries(AUTO_WHEN).map(([type, label]) => ({ type, label }))]];
-      const kind = h('select', { class: 'auto-kind', 'aria-label': 'What sets it off' }, groups.map(([label, list]) => (label ? h('optgroup', { label }, list.map((e) => opt(e.type, e.label, t.kind))) : list.map((e) => opt(e.type, e.label, t.kind)))));
-      kind.addEventListener('change', () => { dr.trigger = { kind: kind.value, ...(kind.value === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); });
       const only = [];
       const fl = autoFilters(t.kind);
       if (fl.includes('project')) {
         const projs = S.projects || [];
         const sel = h('select', { class: 'auto-proj' }, opt('', 'Any project', t.projectId || ''), projs.map((p) => opt(p.id, p.name, t.projectId || '')));
         sel.addEventListener('change', () => { t.projectId = sel.value || null; t.typeId = null; t.to = null; draw(); });
-        only.push(h('label', {}, 'In', sel));
+        only.push(h('label', {}, 'In project', sel));
         const p = projById(t.projectId);
         if (p) {
           const ls = h('select', { class: 'auto-list' }, opt('', 'Any list', t.typeId || ''), p.types.map((y) => opt(y.id, y.name, t.typeId || '')));
@@ -6040,7 +6171,7 @@
       if (fl.includes('campaign')) {
         const sel = h('select', {}, opt('', 'Any campaign', t.campaignId || ''), camps.map((c) => opt(c.id, c.name, t.campaignId || '')));
         sel.addEventListener('change', () => (t.campaignId = sel.value || null));
-        only.push(h('label', {}, 'In', sel));
+        only.push(h('label', {}, 'In campaign', sel));
       }
       // One step, by name (a saved campaign's next run has steps with the same names), 2026-11-20.
       if (fl.includes('step')) {
@@ -6080,13 +6211,29 @@
         time.addEventListener('change', () => (slot.time = time.value || '09:00'));
         only.push(h('div', { class: 'picks' }, DOWS.map((d, i) => { const cb = h('input', { type: 'checkbox', checked: slot.days.includes(i) }); cb.addEventListener('change', () => (slot.days = cb.checked ? [...slot.days, i].sort() : slot.days.filter((y) => y !== i))); return h('label', { class: 'pick' }, cb, d); })), h('label', {}, 'At', time));
       }
+      const tSet = ['schedule', 'record.date', 'contact.stage'].includes(t.kind) ? only : [];
+      const tAdv = tSet === only ? [] : only;
       const words = (AUTO_WORDS[t.kind] || []).map((w) => `{${w}}`).join(' ');
       // A step: an action, a wait, or "only if" with its own steps (and "otherwise"), in the list it's in.
       const answers = allSteps(dr.actions).some((y) => y.kind === 'agent' && y.wait);
       const fields = ['amount', ...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].filter((v, n, all) => all.indexOf(v) === n);
       const countSteps = (list) => list.reduce((n, s) => n + 1 + (s.kind === 'if' ? countSteps(s.then || []) + countSteps(s.else || []) : 0), 0);
       const roomForMore = () => countSteps(dr.actions) < 20;
-      const newStep = () => ({ kind: 'notify', text: '', to: [] });
+      const freshStep = (v, a = {}) => (v === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
+            : v === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' }
+            : v === 'record' || v === 'create' ? { kind: v, projectId: t.projectId || S.projects?.[0]?.id || '', typeId: t.projectId ? t.typeId || '' : '', set: [] }
+            : v === 'visit' ? { kind: 'visit', visit: 'Visit', inDays: 1, start: '09:00', length: 60, crew: 'who' }
+            : v === 'invoice' ? { kind: 'invoice', send: false }
+            : v === 'email' ? { kind: 'email', subject: '', text: a.text || '' }
+            : v === 'money' ? { kind: 'money', direction: 'in', amount: '', category: '', note: '' }
+            : v === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
+            : v === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
+            : v === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
+            : v === 'teams' ? { kind: 'teams', op: 'post', text: a.text || '' }
+            : v === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
+            : v === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
+            : { kind: v, text: a.text || '', to: [], channelId: 'same' });
+      const addAt = (list, i, depth) => (e) => autoPicker(e.currentTarget, { title: 'Add a step or tool', items: autoDoItems(null, depth), groups: AUTO_GROUPS, refocus: panelBtn, onPick: (v) => { const y = freshStep(v); list.splice(i, 0, y); B.sel = y; B.tab = 'set'; draw(); } });
       // Moving a step (dragged by its ⋮⋮) to a place in a list: never into itself, and "only if" 3 deep at most.
       const ifDepth = (y) => (y.kind === 'if' ? 1 + Math.max(0, ...[...(y.then || []), ...(y.else || [])].map(ifDepth)) : 0);
       const holds = (y, list) => y.kind === 'if' && (y.then === list || y.else === list || [...(y.then || []), ...(y.else || [])].some((z) => holds(z, list)));
@@ -6108,7 +6255,7 @@
         el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); moveStep(B.drag || e.dataTransfer.getData('text/plain'), list, i, depth); });
         return el;
       };
-      const ins = (list, i, depth) => dropAt(h('div', { class: 'auto-ins' }, roomForMore() ? h('button', { class: 'auto-ins-btn', title: 'Add a step here', 'aria-label': 'Add a step here', onclick: () => { list.splice(i, 0, newStep()); draw(); } }, '+') : null), list, i, depth);
+      const ins = (list, i, depth) => dropAt(h('div', { class: 'auto-ins' }, roomForMore() ? h('button', { class: 'auto-ins-btn', title: 'Add a step here', 'aria-label': 'Add a step here', onclick: addAt(list, i, depth) }, '+') : null), list, i, depth);
       const stepList = (list, depth, label, pre = '') => {
         B.reg.lists.set(pre, list);
         const kids = [];
@@ -6116,31 +6263,14 @@
         return h('div', { class: 'auto-steps' + (depth ? ' nested' : ''), 'data-list': pre },
           label ? h('div', { class: 'auto-steps-h' }, label) : null,
           ...kids,
-          roomForMore() ? dropAt(h('button', { class: 'btn small auto-add-step', onclick: () => { list.push(newStep()); draw(); } }, depth ? '+ Step' : '+ Another step'), list, list.length, depth) : null,
+          roomForMore() ? dropAt(h('button', { class: 'btn small auto-add-step', onclick: (e) => addAt(list, list.length, depth)(e) }, depth ? '+ Step' : '+ Another step'), list, list.length, depth) : null,
           depth ? null : h('div', { class: 'auto-end' }, 'Done'));
       };
       const action = (a, i, list = dr.actions, depth = 0, at = String(i)) => {
         B.reg.nodes.set(at, { list, i });
-        const k = h('select', { class: 'auto-step-kind', 'aria-label': 'What this step does' }, Object.entries(AUTO_DO).filter(([v]) => autoDoOk(v) || v === a.kind).map(([v, l]) => opt(v, l, a.kind)), opt('wait', 'Wait…', a.kind), depth < 3 ? opt('if', 'Only if…', a.kind) : null);
-        k.addEventListener('change', () => {
-          list[i] = k.value === 'if' ? { kind: 'if', when: [{ field: fields.includes('stage') ? 'stage' : fields[0], op: 'is', value: '' }], then: [{ kind: 'notify', text: '', to: [] }], else: [] }
-            : k.value === 'wait' ? { kind: 'wait', amount: 1, unit: 'days' }
-            : k.value === 'record' || k.value === 'create' ? { kind: k.value, projectId: t.projectId || S.projects?.[0]?.id || '', typeId: t.projectId ? t.typeId || '' : '', set: [] }
-            : k.value === 'visit' ? { kind: 'visit', visit: 'Visit', inDays: 1, start: '09:00', length: 60, crew: 'who' }
-            : k.value === 'invoice' ? { kind: 'invoice', send: false }
-            : k.value === 'email' ? { kind: 'email', subject: '', text: a.text || '' }
-            : k.value === 'money' ? { kind: 'money', direction: 'in', amount: '', category: '', note: '' }
-            : k.value === 'doc' ? { kind: 'doc', templateId: DT.list?.[0]?.id || '', title: '' }
-            : k.value === 'vault' ? { kind: 'vault', to: 'maker', title: '', text: '' }
-            : k.value === 'webhook' ? { kind: 'webhook', url: '', secretId: null }
-            : k.value === 'teams' ? { kind: 'teams', op: 'post', text: a.text || '' }
-            : k.value === 'agent' ? { kind: 'agent', agent: 'team', ask: '', wait: false }
-            : k.value === 'stock' ? { kind: 'stock', act: 'use', itemId: '', qty: 1, from: '', to: '', note: '' }
-            : { kind: k.value, text: a.text || '', to: [], channelId: 'same' };
-          draw();
-        });
+        const setKind = (v) => { list[i] = freshStep(v, a); B.sel = list[i]; B.tab = 'set'; draw(); };
         const text = (ph) => { const el = h('input', { value: a.text || '', placeholder: ph }); el.addEventListener('input', () => (a.text = el.value)); return el; };
-        const f = [];
+        const f = [], adv = [];
         if (a.kind === 'task') {
           const who = h('select', {}, opt('', 'Nobody', a.assignee || ''), opt('who', 'Whoever set it off', a.assignee || ''), people.map((m) => opt(m.id, m.name, a.assignee || '')), (S.workspace.roles || []).map((r) => opt('role:' + r.id, 'Role: ' + r.name, a.assignee || '')));
           who.addEventListener('change', () => (a.assignee = who.value));
@@ -6158,15 +6288,18 @@
           from.addEventListener('change', () => { if (from.value) { a.presetId = from.value; a.presetName = presetById(from.value)?.name; } else { delete a.presetId; delete a.presetName; } draw(); });
           const y = a.presetId && presetById(a.presetId);
           if (a.presetId) who.firstChild.textContent = 'As saved';
-          f.push(h('label', {}, 'Make it from', from));
+          adv.push(h('label', {}, 'Make it from', from));
           if (a.presetId) f.push(y ? h('p', { class: 'day-hint auto-preset-says' }, y.kind === 'bundle' ? y.steps.map((st) => presetById(st.presetId)?.text).filter(Boolean).join(' → ') : y.text) : h('p', { class: 'err' }, `The saved task “${a.presetName || '?'}” was deleted. Pick another, or write it here.`));
-          else f.push(h('label', {}, 'Task', text('Schedule the work for {document}')), saved.length ? null : h('small', { class: 'hint' }, 'Tip: save tasks you make again and again in Tasks → 📋 Saved tasks, then pick them here.'));
-          f.push(h('div', { class: 'row2' }, h('label', {}, a.presetId && y?.kind === 'bundle' ? 'All of them for' : 'For', who), h('label', {}, a.presetId && y?.kind === 'bundle' ? 'First one due in (days)' : 'Due in (days)', due)), h('label', {}, 'Under', camp));
+          else f.push(h('label', {}, 'Task', text('Schedule the work for {document}')));
+          if (!saved.length) adv.push(h('small', { class: 'hint' }, 'Tip: save tasks you make again and again in Tasks → 📋 Saved tasks, then pick them here.'));
+          f.push(h('div', { class: 'row2' }, h('label', {}, a.presetId && y?.kind === 'bundle' ? 'All of them for' : 'For', who), h('label', {}, a.presetId && y?.kind === 'bundle' ? 'First one due in (days)' : 'Due in (days)', due)));
+          adv.push(h('label', {}, 'Under', camp));
         }
         if (a.kind === 'post') {
           const ch = h('select', {}, opt('same', 'The campaign’s own feed', a.channelId || 'same'), opt('general', '#general', a.channelId || 'same'), S.workspace.channels.map((c) => opt(c.id, '#' + c.name, a.channelId || 'same')));
           ch.addEventListener('change', () => (a.channelId = ch.value));
-          f.push(autoTemplatePick(['post', 'reply'], (x) => { a.text = x.body; draw(); }), h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
+          adv.push(autoTemplatePick(['post', 'reply'], (x) => { a.text = x.body; draw(); }));
+          f.push(h('label', {}, 'Message', text('{from} sent {file}')), h('label', {}, 'In', ch));
         }
         if (a.kind === 'campaign') {
           const tpls = S.templates || [];
@@ -6228,7 +6361,8 @@
           const crewV = a.crew === 'who' ? 'who' : Array.isArray(a.crew) && a.crew[0] ? a.crew[0] : '';
           const crew = h('select', { class: 'auto-visit-crew', 'aria-label': 'Who goes' }, opt('who', 'Whoever set it off', crewV), opt('', 'Me (who made this)', crewV), people.map((m) => opt(m.id, m.name, crewV)));
           crew.addEventListener('change', () => (a.crew = crew.value === 'who' ? 'who' : crew.value ? [crew.value] : []));
-          f.push(h('div', { class: 'row2' }, h('label', {}, 'Visit', kd), h('label', {}, 'In (days)', n)), h('div', { class: 'row2' }, h('label', {}, 'At', at), h('label', {}, 'For', len)), h('label', {}, 'Who goes', crew),
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Visit', kd), h('label', {}, 'In (days)', n)), h('label', {}, 'At', at));
+          adv.push(h('div', { class: 'row2' }, h('label', {}, 'For', len), h('label', {}, 'Who goes', crew)),
             h('small', { class: 'hint' }, 'On the job that set it off, on their calendar and the team schedule. 0 days is today; no time makes it an all-day visit.'));
         }
         if (a.kind === 'invoice') {
@@ -6240,13 +6374,17 @@
         // Attach proof of insurance: {proof} becomes a link to what's current in the workspace profile, one per customer.
         const proofBtn = (key, sep) => (/\{proof\}/.test(a[key] || '') ? h('small', { class: 'hint auto-proof-on' }, '🪪 {proof} is a link to your current licenses & insurance (workspace profile).')
           : h('button', { type: 'button', class: 'btn small auto-proof', onclick: () => { a[key] = String(a[key] || '').trimEnd() + sep + '{proof}'; draw(); } }, '🪪 Attach proof of insurance'));
-        if (a.kind === 'text') f.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), proofBtn('text', ' Our licenses & insurance: '), okHint, h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        if (a.kind === 'text') {
+          f.push(h('label', {}, 'Text', text('Hi {customer}, we’re on our way for {record}')), okHint);
+          adv.push(autoTemplatePick(['text', 'reply'], (x) => { a.text = x.body.slice(0, 1600); draw(); }), proofBtn('text', ' Our licenses & insurance: '), h('small', { class: 'hint' }, 'From your team’s Twilio number (Settings → Texting).'));
+        }
         if (a.kind === 'email') {
           const sub = h('input', { value: a.subject || '', placeholder: '{record} is done', class: 'auto-email-sub' });
           sub.addEventListener('input', () => (a.subject = sub.value));
           const body = h('textarea', { rows: 4, placeholder: 'Hi,\n\nThanks for choosing us for {record}…', class: 'auto-email-body' }, a.text || '');
           body.addEventListener('input', () => (a.text = body.value));
-          f.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), proofBtn('text', '\n\nOur licenses & insurance: '), okHint);
+          f.push(h('label', {}, 'Subject', sub), h('label', {}, 'Message', body), okHint);
+          adv.push(autoTemplatePick(['email', 'reply'], (x) => { a.subject = x.subject || a.subject || ''; a.text = x.body; draw(); }), proofBtn('text', '\n\nOur licenses & insurance: '));
         }
         if (a.kind === 'money') {
           const dir = h('select', { class: 'auto-money-dir' }, opt('in', 'Money in', a.direction || 'in'), opt('out', 'Money out', a.direction || 'in'));
@@ -6257,7 +6395,8 @@
           cat.addEventListener('input', () => (a.category = cat.value));
           const note = h('input', { value: a.note || '', placeholder: '{record}', class: 'auto-money-note' });
           note.addEventListener('input', () => (a.note = note.value));
-          f.push(h('div', { class: 'row2' }, h('label', {}, 'Which', dir), h('label', {}, 'Amount ($)', amt)), h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Note', note)),
+          adv.push(h('div', { class: 'row2' }, h('label', {}, 'Category', cat), h('label', {}, 'Note', note)));
+          f.push(h('div', { class: 'row2' }, h('label', {}, 'Which', dir), h('label', {}, 'Amount ($)', amt)),
             h('small', { class: 'hint' }, 'Into the business’s Finance, dated the day it runs. Leave the amount empty to use the {amount} of what set it off.'));
         }
         if (a.kind === 'doc') {
@@ -6282,7 +6421,7 @@
           const savedAsks = (SV.list || []).filter((y) => y.kind === 'ask');
           const fromAsk = savedAsks.length ? h('select', { class: 'auto-ask-from', 'aria-label': 'Start from a saved ask' }, h('option', { value: '' }, 'Start from a saved ask…'), savedAsks.map((y) => h('option', { value: y.id }, y.name))) : null;
           fromAsk?.addEventListener('change', () => { const y = savedAsks.find((z) => z.id === fromAsk.value); if (y) { a.ask = y.ask; a.agent = y.agent || 'team'; draw(); } });
-          if (fromAsk) f.push(h('label', { class: 'auto-tpl-row' }, 'Start from', fromAsk));
+          if (fromAsk) adv.push(h('label', { class: 'auto-tpl-row' }, 'Start from', fromAsk));
           const cb = h('input', { type: 'checkbox', checked: !!a.wait, class: 'auto-agent-wait' });
           cb.addEventListener('change', () => { a.wait = cb.checked; draw(); });
           f.push(h('label', {}, 'Ask', who), h('label', {}, 'What to ask', ask), h('label', { class: 'pick' }, cb, 'Wait for the answer, then go on with {answer}'),
@@ -6344,7 +6483,8 @@
           });
           adding.append(h('div', { class: 'row2' }, kn, kv), save, h('small', { class: 'hint' }, 'Sealed on Kloomie’s server and never shown again (only its last four). Sent as “Authorization: Bearer …”.'));
           ks.addEventListener('change', () => { if (ks.value === '+') { adding.hidden = false; kn.focus(); } else { adding.hidden = true; a.secretId = ks.value || null; } });
-          f.push(h('label', {}, 'Address', url), h('label', {}, 'Key', ks), adding,
+          f.push(h('label', {}, 'Address', url));
+          adv.push(h('label', {}, 'Key', ks), adding,
             h('small', { class: 'hint' }, 'Sends what happened ({record}, {amount}, {customer}… whatever this one fills in) as JSON, every time it runs. Only public https addresses; it gives up after 10 seconds.'));
         }
         if (a.kind === 'wait') {
@@ -6370,7 +6510,6 @@
         }
         const branches = a.kind === 'if' ? h('div', { class: 'auto-branches' }, stepList(a.then ||= [], depth + 1, 'Then', at + '.then.'), stepList(a.else ||= [], depth + 1, 'Otherwise', at + '.else.')) : null;
         const prob = autoProblem(a);
-        const folded = B.folded.has(a);
         const grip = h('span', { class: 'auto-grip', draggable: 'true', title: 'Drag to move' }, '⋮⋮');
         grip.addEventListener('dragstart', (e) => { B.drag = at; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', at); });
         grip.addEventListener('dragend', () => (B.drag = null));
@@ -6380,20 +6519,23 @@
           i < list.length - 1 ? { label: 'Move down', run: () => { list.splice(i + 1, 0, list.splice(i, 1)[0]); draw(); } } : null,
         ].filter(Boolean);
         const would = B.would?.get(at);
-        const node = h('div', { class: 'auto-act' + (a.kind === 'if' ? ' auto-if' : a.kind === 'wait' ? ' auto-wait' : '') + (prob ? ' bad' : '') + (B.lit ? (B.lit.has(at) ? ' lit' : ' dim') : '') + (folded ? ' folded' : ''), 'data-at': at },
-          h('div', { class: 'auto-act-h' }, grip, h('b', {}, `${i + 1}.`), k, h('span', { class: 'auto-bad', title: prob, 'aria-label': prob, hidden: !prob }, '!'),
-            h('button', { class: 'icon-btn auto-fold', 'aria-label': folded ? 'Unfold this step' : 'Fold this step', title: folded ? 'Unfold' : 'Fold', onclick: () => { folded ? B.folded.delete(a) : B.folded.add(a); draw(); } }, folded ? '▸' : '▾'),
+        const look = autoLook(a.kind), isSel = B.sel === a;
+        const role = a.kind === 'if' ? 'ONLY IF' : a.kind === 'wait' ? 'WAIT' : 'ACTION';
+        const step = depth ? role : `${i + 2}. ${role}`;
+        const node = h('div', { class: 'auto-act an ' + (a.kind === 'if' ? 'an-if auto-if' : a.kind === 'wait' ? 'an-wait auto-wait' : 'an-do') + (prob ? ' bad' : '') + (B.lit ? (B.lit.has(at) ? ' lit' : ' dim') : '') + (isSel ? ' sel' : ''), 'data-at': at },
+          h('div', { class: 'an-h' }, grip, h('i', { class: 'an-dot' }), h('span', { class: 'an-n' }, step), h('span', { class: 'auto-bad', title: prob, 'aria-label': prob, hidden: !prob }, '!'),
             h('button', { class: 'icon-btn auto-more', 'aria-label': 'Step options', html: I.more, onclick: (e) => openMenu(e.currentTarget, menu) }),
-            list.length > 1 || depth ? h('button', { class: 'icon-btn', 'aria-label': 'Remove', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null),
+            list.length > 1 || depth ? h('button', { class: 'icon-btn auto-x', 'aria-label': 'Remove this step', html: I.close, onclick: () => { list.splice(i, 1); draw(); } }) : null),
+          h('button', { type: 'button', class: 'an-b', 'aria-pressed': String(isSel), title: 'Change this step', onclick: () => { if (B.sel !== a) { B.sel = a; B.tab = 'set'; draw(); } } },
+            h('span', { class: `an-ic lk-${look.c}`, 'aria-hidden': 'true' }, look.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoLine(a)), h('span', { class: 'an-chips' }, autoChips(a)))),
           would ? h('div', { class: 'auto-would' + (would.yes === false ? ' no' : '') }, would.said) : null,
-          folded ? h('small', { class: 'auto-fold-line' }, autoLine(a)) : null,
-          ...(folded ? [] : f), branches);
+          branches);
+        if (isSel) B.panel = { ic: look.ic, c: look.c, step, what: a.kind === 'wait' ? 'Wait a while' : a.kind === 'if' ? 'Only if…' : AUTO_DO[a.kind] || a.kind, label: 'Change step', change: (btn) => autoPicker(btn, { title: 'Change this step', items: autoDoItems(a.kind, depth), groups: AUTO_GROUPS, active: a.kind, onPick: setKind, refocus: panelBtn }), f, adv };
         node._step = a;
         return node;
       };
       const every = allSteps(dr.actions);
       const problems = every.filter((y) => autoProblem(y)).length;
-      const anyOpen = every.some((y) => !B.folded.has(y));
       const pastRuns = (x?.runs || []).filter((r) => r.path?.length);
       const runSel = h('select', { class: 'auto-runs', 'aria-label': 'Show a past run' }, opt('', 'Show a past run…', B.run), pastRuns.map((r, n) => opt(String(n), `${r.ok ? '✓' : '✕'} ${ago(r.at)} · ${shortText(r.note, 60)}`, B.run)));
       runSel.addEventListener('change', () => {
@@ -6411,18 +6553,41 @@
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.focus();
       };
+      const tl = autoWhenLook(t.kind), tSel = B.sel === 'trigger';
+      const trig = h('div', { class: 'auto-step auto-trigger an an-when' + (B.lit ? ' lit' : '') + (tSel ? ' sel' : '') },
+        h('div', { class: 'an-h' }, h('i', { class: 'an-dot' }), h('span', { class: 'an-n' }, '1. WHEN')),
+        h('button', { type: 'button', class: 'an-b', 'aria-pressed': String(tSel), title: 'Change what sets it off', onclick: () => { if (!tSel) { B.sel = 'trigger'; B.tab = 'set'; draw(); } } },
+          h('span', { class: `an-ic lk-${tl.c}`, 'aria-hidden': 'true' }, tl.ic), h('span', { class: 'an-txt' }, h('span', { class: 'an-say' }, autoWhenText(t)))));
+      if (tSel) B.panel = { ic: tl.ic, c: tl.c, step: '1. When', what: autoWhenLabel(t.kind), label: 'Change event',
+        change: (btn) => autoPicker(btn, { title: 'Change event', items: autoWhenItems(), groups: autoWhenGroups(), active: t.kind, refocus: panelBtn, onPick: (v) => { dr.trigger = { kind: v, ...(v === 'schedule' ? { slots: [{ days: [1], time: '09:00' }] } : {}) }; draw(); } }),
+        f: tSet.length ? tSet : [h('p', { class: 'day-hint' }, tAdv.length ? 'That’s all it needs. To narrow it down (one campaign, a stage, an amount…), see Advanced settings.' : 'That’s all it needs.')], adv: tAdv };
+      const flow = stepList(dr.actions, 0);
+      const pn = B.panel;
+      // Advanced shows only when it has something to change (not just a tip).
+      const advN = pn.adv.filter((el) => el?.nodeType === 1 && (el.matches('input, select, textarea, button') || el.querySelector('input, select, textarea, button'))).length;
+      if (!advN) B.tab = 'set';
+      const chg = h('button', { type: 'button', class: 'btn small ab-change' }, pn.label);
+      chg.addEventListener('click', () => pn.change(chg));
+      const wordList = [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])];
+      const panel = h('aside', { class: 'ab-panel', 'aria-label': 'Settings for ' + pn.what },
+        h('div', { class: 'ab-ph' }, h('span', { class: `auto-ic lk-${pn.c}`, 'aria-hidden': 'true' }, pn.ic), h('span', { class: 'ab-pt' }, h('small', {}, pn.step), h('b', {}, pn.what)), chg),
+        advN ? h('div', { class: 'ab-tabs seg', role: 'tablist' }, [['set', 'Settings'], ['adv', 'Advanced settings']].map(([k, l]) =>
+          h('button', { type: 'button', 'data-tab': k, role: 'tab', class: B.tab === k ? 'on' : null, 'aria-selected': String(B.tab === k), onclick: () => { if (B.tab !== k) { B.tab = k; draw(); } } }, l))) : null,
+        h('div', { class: 'ab-body' }, ...(B.tab === 'adv' ? pn.adv : pn.f).filter(Boolean)),
+        wordList.length ? h('div', { class: 'auto-words' }, h('span', {}, 'Fill in by themselves:'), wordList.map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null);
       box.replaceChildren(...[
-        h('label', {}, 'Name', name),
-        h('div', { class: 'auto-tools' },
-          h('button', { class: 'btn small auto-test-btn', onclick: testIt }, '▶ Test it'),
-          every.length ? h('button', { class: 'btn small auto-foldall', onclick: () => { for (const y of every) anyOpen ? B.folded.add(y) : B.folded.delete(y); draw(); } }, anyOpen ? 'Fold all' : 'Unfold all') : null,
+        h('div', { class: 'ab-top' }, name,
+          h('button', { class: 'btn small auto-test-btn', onclick: testIt }, '▶ Test your automation'),
           pastRuns.length ? runSel : null,
           h('span', { class: 'auto-probs', hidden: !problems }, `${problems} ${problems === 1 ? 'step needs' : 'steps need'} something`)),
         B.test ? h('div', { class: 'auto-test' + (B.test.err ? ' err' : '') }, h('span', {}, B.test.err || B.test.about), h('button', { class: 'linkish auto-test-clear', onclick: clearLit }, 'Clear')) : null,
-        h('div', { class: 'auto-canvas' },
-          h('div', { class: 'auto-step auto-trigger' + (B.lit ? ' lit' : '') }, h('div', { class: 'auto-step-h' }, 'When'), h('label', {}, '', kind), ...only),
-          h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'Then'), stepList(dr.actions, 0))),
-        words || answers ? h('div', { class: 'auto-words' }, h('span', {}, 'Words that fill themselves in:'), [...(AUTO_WORDS[t.kind] || []), ...(answers ? ['answer'] : [])].map((w) => h('button', { class: 'auto-word', title: `Put {${w}} where the cursor is`, onmousedown: (e) => e.preventDefault(), onclick: () => putWord(w) }, `{${w}}`))) : null].filter(Boolean));
+        h('div', { class: 'ab-main' },
+          h('div', { class: 'auto-canvas' },
+            h('div', { class: 'auto-when-h' }, 'WHEN'), trig,
+            h('div', { class: 'auto-step auto-flow' }, h('div', { class: 'auto-step-h' }, 'THEN'), flow),
+            wordList.length ? h('div', { class: 'ab-pill' }, `Words like ${wordList.slice(0, 2).map((w) => `{${w}}`).join(' and ')} fill in by themselves from what set it off`) : null),
+          panel)].filter(Boolean));
+      if (B.sel !== B.shown) { B.shown = B.sel; if (matchMedia('(max-width: 900px)').matches) panel.scrollIntoView({ block: 'start' }); }
     };
     draw();
     sheet(x ? `Automation · ${x.name}` : recipe ? recipe.name : 'New automation', [box], async () => {
@@ -6878,8 +7043,8 @@
   }
 
   function openCampaign(id) {
-    // Another campaign opens on its Overview (the tab sticks only while you stay in one campaign).
-    if (id && id !== K.open) K.ctab = 'overview';
+    // Another campaign opens on its Plan (the tab sticks only while you stay in one campaign).
+    if (id && id !== K.open) K.ctab = 'plan';
     K.open = id;
     if (id) closeProjects(); // from a job's page (its campaigns, + Campaign): the campaign shows, not the job over it
     store.set('campOpen', id);
@@ -6891,11 +7056,12 @@
 
   // Re-render, unless someone is typing in here; then wait until they're done.
   K.overview ??= store.get('campsOverview', false);
-  K.ctab ??= 'overview';
+  K.ctab ??= 'plan';
   function renderCamps(force) {
     const root = $('#camps');
     if (!S.workspace || !campsShown() || K.sorting) return;
-    if (!force && root.contains(document.activeElement) && document.activeElement.matches('input, textarea, select')) {
+    // A ticked checkbox keeps focus but isn't typing: draw on (2026-11-25, a row's tick on Plan).
+    if (!force && root.contains(document.activeElement) && document.activeElement.matches('input:not([type=checkbox]):not([type=radio]), textarea, select')) {
       K.stale = true;
       return;
     }
@@ -6963,6 +7129,22 @@
   // ----- Command Center part 4 (the owner's brainstorm, 2026-11-20): the campaign's tasks as a list, a board, a
   // timeline and a calendar. One set of tasks, four ways to see it; every view drags: a card to another column, a bar
   // along the timeline or by either end, a task onto another day. -----
+  // The campaign's tabs (2026-11-25, simpler): Plan, Work, Progress. Old places land where their parts went: Activity
+  // and Report on Progress; Overview, Resources, or anything unknown on Plan. The chips under the header: All (open, then done), My tasks, Overdue, Blocked (open only).
+  // Sketch (stage 4): the campaign's whiteboard, when the team has it on and the screen is wide enough to draw.
+  const ccSketchOn = () => toolOn('whiteboard') && document.body.classList.contains('wide');
+  const ccTabs = () => [['plan', 'Plan'], ['work', 'Work'], ['progress', 'Progress'], ...(ccSketchOn() ? [['sketch', 'Sketch']] : [])];
+  const ccTabOf = (k) => (k === 'activity' || k === 'report' ? 'progress' : ccTabs().some(([x]) => x === k) ? k : 'plan');
+  const CC_CHIPS = [['all', 'All'], ['mine', 'My tasks'], ['overdue', 'Overdue'], ['blocked', 'Blocked']];
+  const ccChipOf = (k) => (CC_CHIPS.some(([x]) => x === k) ? k : 'all');
+  function ccChipPick(tasks, k) {
+    const open = tasks.filter((t) => !t.done);
+    if (k === 'mine') return open.filter(taskMine);
+    if (k === 'overdue') return open.filter(isOverdue);
+    if (k === 'blocked') return open.filter((t) => taskBlockers(t).length);
+    return [...open, ...tasks.filter((t) => t.done)];
+  }
+  const ccEmptyText = (k) => (k === 'mine' ? 'Nothing open for you here.' : k === 'blocked' ? 'Nothing is blocked.' : k === 'overdue' ? 'Nothing is overdue.' : 'No tasks here yet.');
   const ccStatus = (t) => (t.done ? ['done', 'Done'] : taskBlockers(t).length ? ['wait', 'Waiting'] : t.submitted ? ['sign', 'For sign-off'] : isOverdue(t) ? ['late', 'Overdue'] : t.status === 'doing' ? ['doing', 'In progress'] : ['open', 'Not started']);
   const ccWorkView = () => (['list', 'board', 'timeline', 'calendar'].includes(K.wview) ? K.wview : (K.wview = store.get('ccWorkView', 'list')));
   // A change from a view: shown at once (patchTask puts it in the list before the server answers), saved, drawn again.
@@ -6993,8 +7175,10 @@
     const by = ['status', 'phase', 'person'].includes(K.wgroup) ? K.wgroup : 'status';
     let cols;
     if (by === 'status') {
-      // The Done column keeps what's done even under Open, so a card dragged there stays in sight.
-      const list = K.wfilter === 'done' || K.wfilter === 'all' ? pick : [...new Set([...pick, ...tasks.filter((t) => t.done)])];
+      // The Done column keeps what's done whatever the chip, so a card dragged there stays in sight; under My tasks,
+      // only what's yours.
+      const mineOnly = ccChipOf(K.wfilter) === 'mine';
+      const list = [...new Set([...pick, ...tasks.filter((t) => t.done && (!mineOnly || taskMine(t)))])];
       const key = (t) => { const s = ccStatus(t)[0]; return s === 'late' ? (t.status === 'doing' ? 'doing' : 'open') : s; };
       cols = [['open', 'Not started', { status: null, done: false }], ['doing', 'In progress', { status: 'doing', done: false }], ['wait', 'Waiting', null], ['sign', 'For sign-off', null], ['done', 'Done', { done: true }]]
         .map(([k, l, set]) => ({ k, label: l, set, list: list.filter((t) => key(t) === k), why: k === 'wait' ? 'A task waits on what it’s set to wait for' : k === 'sign' ? 'A task goes for sign-off when it’s finished' : '' }))
@@ -7160,7 +7344,7 @@
     const zoom = h('div', { class: 'seg seg-sm cct-zoom' }, h('small', {}, 'Zoom:'), [['week', 'Days'], ['month', 'Weeks']].map(([k, l]) =>
       h('button', { class: (K.wzoom === 'month' ? 'month' : 'week') === k ? 'on' : null, 'data-zoom': k, onclick: () => { K.wzoom = k; renderCamps(); } }, l)),
       h('button', { class: 'btn small cct-totoday', onclick: (e) => { const sc = e.currentTarget.closest('.cc-work').querySelector('.cct-scroll'); if (sc) sc.scrollLeft = Math.max(0, xOf(today) - 7 * px); } }, 'Today'));
-    return [zoom, pick.length ? h('div', { class: 'cct-scroll' }, grid) : h('p', { class: 'day-hint' }, 'No tasks here yet.'),
+    return [zoom, pick.length ? h('div', { class: 'cct-scroll' }, grid) : h('p', { class: 'day-hint' }, ccEmptyText(ccChipOf(K.wfilter))),
       h('p', { class: 'day-hint' }, 'Drag a bar to move it, pull either end to change when it starts or is due, drag across an empty row to give a task its days. Arrows show what each task waits for.')];
   }
   // Calendar: a month, each task on its due day; drag it to another day, or a task with no date onto one.
@@ -7307,14 +7491,14 @@
     return h('div', {}, h('div', { class: 'ccr-legend' }, h('span', { class: 'k done' }, 'Done'), h('span', { class: 'k total' }, 'All tasks'), c.end ? h('span', { class: 'k end' }, 'End date') : null), box);
   }
   // The Report tab: the numbers, the chart, phases, people, what's gone quiet, money and calls; Print for paper.
-  function ccReport(c) {
+  function ccReport(c, parts = {}) {
     const ins = campInsights(c);
     const pct = ins.tasks.length ? Math.round((ins.done.length / ins.tasks.length) * 100) : 0;
     const stat = (n, l, cls = '') => h('div', { class: 'ccr-stat ' + cls }, h('b', {}, n), h('small', {}, l));
     const fc = ins.forecast ? (ins.open.length ? ccDay(ins.forecast) : 'Done ' + ccDay(ins.forecast)) : '—';
     const top = h('section', { class: 'cc-card ccr-top' },
       h('div', { class: 'ccr-stats' }, stat(pct + '%', `${ins.done.length} of ${ins.tasks.length} tasks done`), stat(fc, ins.open.length ? 'Forecast finish' : 'Finished', ins.late > 0 ? 'bad' : ins.late != null ? 'good' : ''),
-        stat(ins.onTime != null ? ins.onTime + '%' : '—', 'Finished on time'), stat(String(ins.open.filter(isOverdue).length), 'Overdue now', ins.open.some(isOverdue) ? 'bad' : ''), stat(String(ins.stalls.length), `Quiet ${STALL_DAYS}+ days`, ins.stalls.length ? 'warn' : '')),
+        stat(ins.onTime != null ? ins.onTime + '%' : '—', 'Finished on time'), (() => { const n = ins.open.filter((t) => taskBlockers(t).length).length; return stat(String(n), 'Blocked', n ? 'bad' : ''); })(), stat(String(ins.open.filter(isOverdue).length), 'Overdue now', ins.open.some(isOverdue) ? 'bad' : ''), stat(String(ins.stalls.length), `Quiet ${STALL_DAYS}+ days`, ins.stalls.length ? 'warn' : '')),
       h('p', { class: 'ccr-why' }, ins.forecastWhy, ins.late != null && ins.open.length ? (ins.late > 0 ? ` That’s ${plural(ins.late, 'day')} after the end date (${ccDay(c.end)}).` : ins.late < 0 ? ` That’s ${plural(-ins.late, 'day')} before the end date.` : ' That’s the end date.') : ''));
     const chart = h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Progress over time')), ccBurnup(ins, c));
     const usualTxt = (p) => (p.usual != null ? `${p.usual} d (${plural(p.usualN, 'run')})` : '—');
@@ -7338,15 +7522,19 @@
     const moneyBox = c.budget || c.money ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Money')),
       h('div', { class: 'ccr-stats' }, c.budget ? stat(money(c.budget), 'Budget') : null, c.money?.spent ? stat(money(c.money.spent), 'Spent', c.budget && c.money.spent > c.budget ? 'bad' : '') : null, c.money?.earned ? stat(money(c.money.earned), 'Brought in', 'good') : null)) : null;
     const bar2 = h('div', { class: 'ccr-bar' }, h('small', { class: 'muted' }, `Worked out from the tasks as of ${ccDay(ins.today)}.`), h('span', { style: 'flex:1' }),
-      h('button', { class: 'btn small', onclick: () => openReport(c) }, 'Write a report to the feed'),
+      h('button', { class: 'btn small' + (reportDue(c) ? ' sk-nudge' : ''), title: reportDue(c) ? 'It’s been over a week since the last report' : 'Numbers from the log, and what you found, posted to the feed', onclick: () => openReport(c) }, reportDue(c) ? 'Write a report to the feed ·' : 'Write a report to the feed'),
       h('button', { class: 'btn small ccr-print', onclick: (e) => ccReportPrint(c, e.currentTarget.closest('.cc-body')) }, '🖨 Print'));
-    return [bar2, top, chart, phases, people, quiet, moneyBox, calls].filter(Boolean);
+    // Progress, top to bottom (2026-11-25): the bar, how it's going, the numbers, what to do next, the report, the log.
+    return [bar2, parts.health, top, parts.ideas, h('div', { class: 'ccp-report' }, ...[chart, phases, people, quiet, moneyBox, calls].filter(Boolean)), parts.log].filter(Boolean);
   }
   function ccReportPrint(c, body) {
     const w = window.open('', '_blank');
     if (!w) return toast('Allow pop-ups to print it.');
-    const copy = body.cloneNode(true);
-    copy.querySelectorAll('button:not(.linkish), .ccr-tip, .ccr-bar').forEach((x) => x.remove());
+    // Only how it's going, the numbers and the report: not what to do next, the log or the buttons (2026-11-25).
+    const copy = document.createElement('div');
+    for (const sel of ['.ccp-health', '.ccr-top', '.ccp-report']) { const el = body.querySelector(sel); if (el) copy.append(el.cloneNode(true)); }
+    copy.querySelectorAll('button:not(.linkish), .ccr-tip, .ccr-bar, textarea, input').forEach((x) => x.remove());
+    copy.querySelectorAll('.ccp-h-team').forEach((x) => x.closest('.ccp-h-item')?.remove());
     copy.querySelectorAll('button.linkish').forEach((b) => b.replaceWith(document.createTextNode(b.textContent)));
     w.document.title = `${c.name} · report`;
     const st = w.document.createElement('style');
@@ -7421,35 +7609,71 @@
     for (const id of nid.keys()) ops.push({ op: 'del', item: id });
     if (ops.length) ed.change(ops);
   }
-  async function ccMakePhases(c, btn) {
+  // Update plan (2026-11-25, campaign Sketch): the sketch is a draft; this turns what's new on it into the plan, and
+  // nothing twice. Phases: the phase cards already on the board, and boxes with words (a box named like a phase of
+  // this campaign is that phase). Arrows that touch a box handled now become "waits for" (added only if missing), so
+  // an old arrow doesn't bring back a "waits for" taken off on Plan. Stickies: a task in the phase whose box sits above
+  // them (nearest above, the sticky's middle within the box's width), unless that phase has a task by that name; a
+  // sticky under no phase is left alone. What it used becomes live cards. With something selected, only that.
+  async function ccUpdatePlan(c, btn) {
     const ed = K.cb.ed;
     if (!ed) return;
     const items = ed.items(), links = ed.links(), sel = new Set(ed.selection());
-    const fit = (x) => !x.ref && String(x.text || '').trim() && (sel.size ? sel.has(x.id) && ['shape', 'sticky', 'text', 'frame'].includes(x.kind) : x.kind === 'shape');
-    const pick = items.filter(fit);
-    if (!pick.length) return toast(sel.size ? 'Select shapes or stickies with words in them.' : 'Draw shapes with the phase names in them (or select stickies), then Make phases.');
+    const inSel = (x) => !sel.size || sel.has(x.id);
+    const norm = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    const campPhases = () => goalsOf(c.id).filter((g) => !['count', 'money'].includes(g.kind));
+    const phaseOf = new Map();
+    for (const x of items) if (x.kind === 'card' && x.ref?.kind === 'goal') { const g = goalById(x.ref.id); if (g?.campaignId === c.id) phaseOf.set(x.id, g); }
+    const shapes = items.filter((x) => x.kind === 'shape' && !x.ref && norm(x.text) && inSel(x));
+    const stickies = items.filter((x) => x.kind === 'sticky' && !x.ref && norm(x.text) && inSel(x));
+    let newPhases = 0, newTasks = 0, already = 0, failed = null;
+    const cards = [];
     btn.disabled = true;
-    const made = new Map();
     try {
-      for (const x of ccFlowOrder(pick, links)) {
-        const g = await api('POST', '/goals', { campaignId: c.id, title: String(x.text).trim().slice(0, 200) });
-        if (!S.goals.some((y) => y.id === g.id)) S.goals.push(g);
-        made.set(x.id, g);
+      for (const x of ccFlowOrder(shapes, links)) {
+        const same = campPhases().find((g) => norm(g.title) === norm(x.text));
+        if (same) { phaseOf.set(x.id, same); already++; }
+        else {
+          const g = await api('POST', '/goals', { campaignId: c.id, title: String(x.text).trim().slice(0, 200) });
+          if (!S.goals.some((y) => y.id === g.id)) S.goals.push(g);
+          phaseOf.set(x.id, g);
+          newPhases++;
+        }
+        cards.push([x.id, { kind: 'goal', id: phaseOf.get(x.id).id }]);
       }
-      // An arrow from one to another: the second waits for the first.
+      const fresh = new Set(shapes.map((x) => x.id));
       for (const l of links) {
-        const a = made.get(l.from), b = made.get(l.to);
-        if (!a || !b || a === b) continue;
+        if (!fresh.has(l.from) && !fresh.has(l.to)) continue;
+        const a = phaseOf.get(l.from), b = phaseOf.get(l.to);
+        if (!a || !b || a.id === b.id) continue;
         const now = goalById(b.id) || b;
-        const y = await api('PATCH', '/goals/' + b.id, { blockedBy: [...new Set([...(now.blockedBy || []), a.id])] });
+        if ((now.blockedBy || []).includes(a.id) || (goalById(a.id)?.blockedBy || []).includes(b.id)) continue;
+        const y = await api('PATCH', '/goals/' + b.id, { blockedBy: [...(now.blockedBy || []), a.id] });
         const i = S.goals.findIndex((z) => z.id === y.id); if (i >= 0) S.goals[i] = y;
       }
-      // The shapes become live phase cards, where they are, so the arrows stay.
-      ccToCards(ed, [...made].map(([id, g]) => [id, { kind: 'goal', id: g.id }]));
-      ed.refresh?.();
-      toast(`Made ${made.size} phase${made.size === 1 ? '' : 's'}${links.some((l) => made.has(l.from) && made.has(l.to)) ? ', with what waits for what' : ''}`);
-      renderCamps();
-    } catch (e) { toast(e.message); }
+      const boxes = items.filter((x) => phaseOf.has(x.id));
+      for (const s of stickies.sort((a, b) => a.y - b.y || a.x - b.x)) {
+        const mid = s.x + (s.w || 200) / 2;
+        const over = boxes.filter((bx) => mid >= bx.x && mid <= bx.x + (bx.w || 200) && bx.y + (bx.h || 90) <= s.y + 1).sort((a, b) => b.y - a.y)[0];
+        if (!over) continue;
+        const g = phaseOf.get(over.id);
+        if (S.tasks.some((t) => t.goalId === g.id && norm(t.text) === norm(s.text))) { already++; continue; }
+        const t = await api('POST', '/tasks', { goalId: g.id, text: String(s.text).trim().slice(0, 500) });
+        upsertTask(t);
+        cards.push([s.id, { kind: 'task', id: t.id }]);
+        newTasks++;
+      }
+    } catch (e) { failed = e; }
+    // What it made becomes cards and is said even when something failed halfway (then why it stopped); the rest stays
+    // as drawn, for another Update plan.
+    if (cards.length) { ccToCards(ed, cards); ed.refresh?.(); }
+    const asPlan = { label: 'View as plan', run: () => { K.ctab = 'plan'; renderCamps(); } };
+    const made = [newPhases ? plural(newPhases, 'phase') : '', newTasks ? plural(newTasks, 'task') : ''].filter(Boolean).join(' and ');
+    const said = made ? `Added ${made}${already ? ` · ${already} already there` : ''}` : '';
+    if (failed) toast(said ? `${said}, then stopped: ${failed.message}` : failed.message, said ? asPlan : undefined);
+    else if (said) toast(said, asPlan);
+    else toast(shapes.length || stickies.length ? 'Nothing new to add: what’s here is in the plan already, or not under a phase.' : 'Nothing new to add. Draw a box for a phase, put stickies under it for its tasks, then Update plan.');
+    renderCamps();
     btn.disabled = false;
   }
   function ccMakeTasks(c, btn, phases) {
@@ -7483,9 +7707,10 @@
     if (!K.cb.board && !K.cb.none && !K.cb.loading) ccBoardLoad(c);
     if (K.cb.loading || (!K.cb.board && !K.cb.none)) return h('section', { class: 'cc-card' }, h('p', { class: 'day-hint' }, 'Loading the board…'));
     if (!K.cb.board) return h('section', { class: 'cc-card cc-board-empty' }, h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ Sketch this campaign on a board')),
-      h('p', { class: 'day-hint' }, 'Map how the work flows with shapes and arrows, brainstorm with stickies, then turn them into phases and tasks. Whoever sees the campaign sees its board.'),
+      h('p', { class: 'day-hint' }, 'Draw the campaign out: a box for each phase, arrows for what comes first, stickies under a phase for its tasks. Update plan turns it into the plan; nothing is real until then. Whoever sees the campaign sees its board.'),
       h('div', { class: 'cc-board-starts' },
-        h('button', { class: 'btn primary-btn small', 'data-tpl': 'workflow', onclick: () => ccBoardStart(c, 'workflow') }, 'Workflow map'),
+        h('button', { class: 'btn primary-btn small', 'data-tpl': 'phases', title: 'The phases and tasks you have, drawn out to rearrange and add to', onclick: () => ccBoardStart(c, 'phases') }, 'Phases & tasks'),
+        h('button', { class: 'btn small', 'data-tpl': 'workflow', onclick: () => ccBoardStart(c, 'workflow') }, 'Workflow map'),
         h('button', { class: 'btn small', 'data-tpl': 'brainstorm', onclick: () => ccBoardStart(c, 'brainstorm') }, 'Campaign brainstorm'),
         h('button', { class: 'btn small', 'data-tpl': 'mindmap', onclick: () => ccBoardStart(c, 'mindmap') }, 'Mind map'),
         h('button', { class: 'btn small', 'data-tpl': 'blank', onclick: () => ccBoardStart(c, 'blank') }, 'Blank')));
@@ -7493,12 +7718,13 @@
       K.cb.mount = h('div', { class: 'cc-board' });
       K.cb.ed = boardEditor(K.cb.board, K.cb.mount, { campaign: c });
     } else K.cb.ed?.refresh?.();
-    const mk = h('button', { class: 'btn small primary-btn cc-mkphases', title: 'Selected shapes or stickies, or every shape with words in it, become phases in flow order; arrows between them become “waits for”', onclick: (e) => ccMakePhases(c, e.currentTarget) }, '◆ Make phases');
+    const up = h('button', { class: 'btn small primary-btn cc-update-plan', title: 'New boxes become phases (arrows: what waits for what), stickies under a phase become its tasks; nothing twice', onclick: (e) => ccUpdatePlan(c, e.currentTarget) }, '↻ Update plan');
     const mt = h('button', { class: 'btn small cc-mktasks', title: 'The selected stickies become tasks in a phase', onclick: (e) => ccMakeTasks(c, e.currentTarget, phases) }, '☑ Make tasks in…');
     return h('section', { class: 'cc-card cc-boardwrap' },
-      h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ ' + (K.cb.board.name || 'Board')), h('span', { style: 'flex:1' }), mk, mt,
-        h('button', { class: 'btn small', title: 'Open the board full page', onclick: () => { const id = K.cb.board.id; ccBoardDrop(); openBoard(id); } }, '⤢ Full page')),
-      h('small', { class: 'hint' }, 'Draw a shape for each phase and join them with arrows, then Make phases. Select stickies and Make tasks in… a phase. Cards show the real phases and tasks.'),
+      h('div', { class: 'cc-card-h' }, h('b', {}, '🗺️ ' + (K.cb.board.name || 'Board')), h('span', { style: 'flex:1' }), up, mt,
+        h('button', { class: 'btn small', title: 'Open the board full page', onclick: () => { const id = K.cb.board.id; ccBoardDrop(); openBoard(id); } }, '⤢ Full page'),
+        h('button', { class: 'btn small cc-asplan', onclick: () => { K.ctab = 'plan'; renderCamps(); } }, 'View as plan →')),
+      h('small', { class: 'hint' }, 'A box for each phase, arrows for what comes first, stickies under a phase for its tasks; then Update plan. Cards are the real phases and tasks.'),
       K.cb.mount);
   }
   // ----- a campaign's test run (2026-11-20, the sandbox): start it with testers; while it runs a banner says so, with
@@ -7783,17 +8009,18 @@
     // ----- the Campaign Command Center (2026-11-20, the owner's brainstorm): a header with health, dates, owner and the
     // team; KPIs from the real work; five tabs (Overview, Plan, Work, Resources, Activity); phases (the steps) as
     // connected cards; a Pulse panel down the side at full size. Every part of the old page is in one of the tabs.
-    const tab = ['overview', 'plan', 'work', 'resources', 'activity', 'report'].includes(K.ctab) ? K.ctab : 'overview';
-    const setTabC = (k) => { K.ctab = k; K.pulse = false; renderCamps(); }; // the Pulse is a pop-out: going somewhere closes it
+    const tab = ccTabOf(K.ctab);
+    const setTabC = (k) => { K.ctab = k; renderCamps(); };
     const tasks = campTasks(c), open = tasks.filter((t) => !t.done);
     const phases = goals.filter((g) => !['count', 'money'].includes(g.kind));
     const targets = goals.filter((g) => ['count', 'money'].includes(g.kind));
     const blocked = open.filter((t) => taskBlockers(t).length), overdue = open.filter(isOverdue);
     const hl = campHealth(c);
-    // The numbers, one thin line (the owner, 2026-11-22: the page was too busy): each opens its place.
-    const kpi = (cls, ic, n, label, onclick) => h(onclick ? 'button' : 'div', { class: 'cc-kpi ' + cls, onclick }, h('b', {}, n), h('small', {}, label));
-    // The Pulse is a button now; it opens beside the page when you want it. A number on it: things to do next.
-    const pulseBtn = h('button', { class: 'btn small cc-pulse-btn' + (K.pulse ? ' on' : ''), 'aria-expanded': String(!!K.pulse), title: 'How it’s going, and what to do next', onclick: () => { K.pulse = !K.pulse; renderCamps(); } }, '〰 Pulse');
+    // The chips (2026-11-25): how complete it is, then All, My tasks, Overdue, Blocked; they filter Plan and Work.
+    const chip = ccChipOf(K.wfilter);
+    const chips = h('div', { class: 'cc-chips', role: 'toolbar', 'aria-label': 'Show' },
+      h('span', { class: 'cc-chips-pct' }, Math.round(p * 100) + '% complete'),
+      CC_CHIPS.map(([k, l]) => h('button', { type: 'button', class: 'cc-chip' + (chip === k ? ' on' : '') + (k === 'overdue' && overdue.length ? ' bad' : ''), 'data-chip': k, 'aria-pressed': String(chip === k), onclick: () => { K.wfilter = k; renderCamps(); } }, l)));
     const head = h('div', { class: 'cc-head' },
       h('div', { class: 'cc-crumb' }, h('button', { class: 'linkish', onclick: () => openCampaign(null) }, 'Campaigns'), parentOf(c) ? [' › ', h('button', { class: 'linkish', onclick: () => openCampaign(c.parentId) }, parentOf(c).name)] : null, ' › ', h('span', {}, c.name)),
       h('div', { class: 'cc-title-row' },
@@ -7804,11 +8031,10 @@
         campDates(c) ? h('span', { class: 'cc-meta-item' }, '📅 ', campDates(c)) : null,
         h('button', { class: 'pill pill-btn cc-owner', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
         h('span', { style: 'flex:1' }),
-        pulseBtn,
         !c.test && runsIt(c) && c.status !== 'done' ? h('button', { class: 'btn small cc-testbtn', title: 'Run it for real with testers first: nothing goes out, and Go live puts it back', onclick: () => testSheet(c) }, '🧪 Test run') : null,
         h('button', { class: 'btn primary-btn small cc-add', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Add to the campaign' },
           { label: '+ A phase', run: () => goalSheet(c) },
-          phases.length ? { label: '+ A task (in a phase)', run: () => openMenu(e.target, [{ head: 'Which phase?' }, ...phases.map((g) => ({ label: g.title, run: () => { K.osel = { c: c.id, goal: g.id, task: null }; K.pfocus = true; setTabC('overview'); } }))]) } : null,
+          phases.length ? { label: '+ A task (in a phase)', run: () => openMenu(e.target, [{ head: 'Which phase?' }, ...phases.map((g) => ({ label: g.title, run: () => { K.psel = { c: c.id, goal: g.id, task: null }; K.pfocus = true; K.planView = null; setTabC('plan'); } }))]) } : null,
           { label: '+ A target to reach (calls, money…)', run: () => goalSheet(c) },
           { label: '+ A sub-campaign', run: () => campaignSheet(null, c) },
           { label: '✨ Suggest phases and tasks from the brief', run: () => suggestPlan(c, e.target) }].filter(Boolean)) }, '+ Add to campaign'),
@@ -7819,17 +8045,9 @@
         S.campaigns.filter((x) => x.follows === c.id).map((x) => h('button', { class: 'pill pill-btn', title: 'In a series: this comes next', onclick: () => openCampaign(x.id) }, 'Next: ' + x.name + ' →')),
         c.inOrder ? h('span', { class: 'pill', title: 'Phases and tasks open one at a time, top to bottom' }, 'In order') : null,
         who ? h('span', { class: 'pill', title: who.map(memberName).join(', ') }, h('span', { class: 'is-task', html: I.lock }), `Private · ${who.length}`) : null),
-      h('div', { class: 'cc-kpis' },
-        h('div', { class: 'cc-kpi cc-kpi-main' }, h('b', {}, Math.round(p * 100) + '%'), h('small', {}, 'complete')),
-        kpi('phases', '◆', phases.length, phases.length === 1 ? 'Phase' : 'Phases', () => setTabC('plan')),
-        kpi('tasks', '☑', tasks.length, tasks.length === 1 ? 'Task' : 'Tasks', () => { K.wfilter = 'all'; setTabC('work'); }),
-        kpi('blocked' + (blocked.length ? ' bad' : ''), '⏳', blocked.length, 'Blocked', () => { K.wfilter = 'blocked'; setTabC('work'); }),
-        kpi('overdue' + (overdue.length ? ' bad' : ''), '!', overdue.length, 'Overdue', () => { K.wfilter = 'overdue'; setTabC('work'); }),
-        h('div', { class: 'cc-kpi-bar' }, bar(p, c.color))),
-      h('div', { class: 'cc-tabs', role: 'tablist' }, [['overview', 'Overview'], ['plan', 'Plan'], ['work', 'Work'], ['resources', 'Resources'], ['activity', 'Activity'], ['report', 'Report']].map(([k, l]) =>
-        h('button', { class: 'cc-tab' + (tab === k ? ' on' : ''), role: 'tab', 'aria-selected': String(tab === k), 'data-ctab': k, onclick: () => setTabC(k) }, l)),
-        h('span', { style: 'flex:1' }),
-        h('button', { class: 'btn small cc-edit', onclick: () => campaignSheet(c) }, '✎ Edit campaign')));
+      chips,
+      h('div', { class: 'cc-tabs', role: 'tablist' }, ccTabs().map(([k, l]) =>
+        h('button', { class: 'cc-tab' + (tab === k ? ' on' : ''), role: 'tab', 'aria-selected': String(tab === k), 'data-ctab': k, onclick: () => setTabC(k) }, l))));
     // The brief: objective (the old brief), audience, strategy, and success metrics (targets with live numbers).
     const field = (k, label, ph) => {
       const v = k === 'brief' ? c.brief : c[k];
@@ -7866,48 +8084,51 @@
       h('div', { class: 'camp-subs' }, subsOf(c).map((x) => h('button', { class: 'sub-card c-' + x.color + (x.status === 'done' ? ' done' : ''), onclick: () => openCampaign(x.id) },
         h('div', { class: 'cc-top' }, h('b', {}, x.name), h('span', { class: 'cc-pct' }, Math.round(campProgress(x) * 100) + '%')), bar(campProgress(x), x.color), subLine(x) ? h('div', { class: 'cc-sub' }, subLine(x)) : null)),
         h('button', { class: 'add-goal', onclick: () => campaignSheet(null, c) }, '+ Add a sub-campaign'))) : null;
-    // Work: every task in one list, with quick filters; a task opens beside the page.
-    const wf = ['all', 'mine', 'open', 'blocked', 'overdue', 'done'].includes(K.wfilter) ? K.wfilter : 'open';
+    // Work (2026-11-25): every task, in the view picked from one dropdown; the chips under the header filter it as they
+    // filter Plan (All: open, then done; My tasks, Overdue, Blocked: open only). A task opens beside the page.
+    const wf = ccChipOf(K.wfilter);
     const workBody = () => {
-      const pick = { all: tasks, mine: open.filter(taskMine), open, blocked, overdue, done: tasks.filter((t) => t.done) }[wf];
+      const pick = ccChipPick(tasks, wf);
       const status = ccStatus;
       const vw = ccWorkView();
-      const views = h('div', { class: 'seg seg-sm cc-wview', role: 'tablist' }, [['list', '☰ List'], ['board', '▥ Board'], ['timeline', '▤ Timeline'], ['calendar', '▦ Calendar']].map(([k, l]) =>
-        h('button', { class: vw === k ? 'on' : null, role: 'tab', 'aria-selected': String(vw === k), 'data-wv': k, onclick: () => { K.wview = k; store.set('ccWorkView', k); renderCamps(); } }, l)));
-      const filters = h('div', { class: 'cc-wf seg seg-sm' }, [['open', `Open · ${open.length}`], ['mine', `Mine · ${open.filter(taskMine).length}`], ['blocked', `Blocked · ${blocked.length}`], ['overdue', `Overdue · ${overdue.length}`], ['done', `Done · ${tasks.length - open.length}`], ['all', `All · ${tasks.length}`]].map(([k, l]) =>
-        h('button', { class: wf === k ? 'on' : null, 'data-wf': k, onclick: () => { K.wfilter = k; renderCamps(); } }, l)));
-      if (vw !== 'list') return h('section', { class: 'cc-card cc-work cc-work-' + vw }, views, filters,
+      // The views behind one dropdown (2026-11-25), kept on this device as before.
+      const sel = h('select', { class: 'cc-wview-sel', 'aria-label': 'View' }, [['list', 'List'], ['board', 'Board'], ['timeline', 'Timeline'], ['calendar', 'Calendar']].map(([k, l]) => h('option', { value: k, selected: vw === k }, l)));
+      // Drawn at once: a focused box holds the page's redraw back, and a dropdown keeps the focus after a pick.
+      sel.addEventListener('change', () => { K.wview = sel.value; store.set('ccWorkView', sel.value); sel.blur(); renderCamps(true); $('#camps .cc-wview-sel')?.focus(); });
+      const views = h('div', { class: 'cc-wbar' }, h('label', { class: 'cc-wview' }, h('span', {}, 'View'), sel));
+      if (vw !== 'list') return h('section', { class: 'cc-card cc-work cc-work-' + vw }, views,
         ...(vw === 'board' ? ccTaskBoard(c, pick, tasks, phases) : vw === 'timeline' ? ccTimeline(c, pick, phases) : ccCalendar(c, pick)));
       return h('section', { class: 'cc-card cc-work' }, views,
-        filters,
         pick.length ? h('div', { class: 'cc-table', role: 'table' },
           h('div', { class: 'cc-tr cc-th', role: 'row' }, ['Task', 'Phase', 'Who', 'Due', 'Priority', 'Status'].map((x) => h('span', { role: 'columnheader' }, x))),
           pick.map((t) => { const [sc, sl] = status(t); const g = goalById(t.goalId); return h('div', { class: 'cc-tr' + (t.done ? ' done' : ''), role: 'row', 'data-task': t.id, tabindex: '0', onclick: () => taskWindow(t), onkeydown: (e) => { if (e.key === 'Enter') taskWindow(t); } },
             h('span', { class: 'cc-tt' }, t.text, t.wo ? h('span', { class: 'wo-chip' }, t.wo.no) : null), h('span', {}, g?.title || ''), h('span', {}, t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : t.roleId || t.castId ? 'A role' : h('small', { class: 'muted' }, 'Nobody')),
             h('span', { class: isOverdue(t) ? 'late' : '' }, t.due ? dueLabel(t.due) : ''), h('span', {}, t.priority ? h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority]) : ''), h('span', {}, h('span', { class: 'cc-status ' + sc }, sl))); }))
-          : h('p', { class: 'day-hint' }, wf === 'mine' ? 'Nothing open for you here.' : wf === 'blocked' ? 'Nothing is blocked.' : wf === 'overdue' ? 'Nothing is overdue.' : 'No tasks here yet.'));
+          : h('p', { class: 'day-hint' }, ccEmptyText(wf)));
     };
-    const resources = () => {
+    // Where things are (2026-11-25): the Resources tab, folded under the brief on Plan.
+    const where = () => {
       const stepRs = phases.filter((g) => stepRes(g).length);
-      return [h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Where things are')),
+      return h('div', { class: 'cc-where' },
         h('div', { class: 'camp-links' },
           ch ? h('button', { class: 'btn small', onclick: () => { setTab('chat'); openChannel('ch:' + ch.id); } }, '# ' + ch.name) : null,
           st ? h('button', { class: 'btn small', title: 'Open a file, add one, or go to the stack', onclick: (e) => filesMenu(e.currentTarget, c) }, `Files · ${files} ▾`) : null,
           st ? h('button', { class: 'btn small', title: 'Jot a quick note, or open one', onclick: (e) => notesMenu(e.currentTarget, c) }, `Notes · ${notes} ▾`) : null,
           mapFor(c) ? h('button', { class: 'btn small', title: 'Runs and pins on the map', onclick: () => openMap({ campaignId: c.id }) }, `Map · ${mapFor(c)}`) : null,
           signsFor(c) ? h('button', { class: 'btn small', title: 'Sent for signature', onclick: () => { SG.filter = c.id; openTool('signs'); } }, `Signatures · ${signsFor(c)}`) : null,
-          vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null)),
-        stepRs.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'What each phase hands its people')),
-          stepRs.map((g) => h('div', { class: 'cc-res-phase' }, h('small', {}, g.title), h('div', { class: 'res-list' }, stepRes(g).map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)))))))))) : null,
-        h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Lists & docs')), lists.length ? lists.map((l) => listCard(c, l)) : h('p', { class: 'day-hint' }, 'Drop a spreadsheet of people on the campaign to make a call list, or add one from Contacts.'))].filter(Boolean);
+          vaultLinked('campaign', c.id) ? h('button', { class: 'btn small', title: 'In your vault', onclick: () => openVaultFor('campaign', c.id) }, h('span', { class: 'vault-ic', html: I.lock }), `Vault · ${vaultLinked('campaign', c.id)}`) : null,
+          stepRs.length ? h('button', { class: 'btn small', title: 'What each phase hands its people', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Phase resources' }, ...stepRs.map((g) => ({ label: g.title + ' · ' + stepRes(g).length, run: () => stepWindow(c, g) }))]) }, 'Phase resources · ' + stepRs.reduce((n, g) => n + stepRes(g).length, 0)) : null,
+          h('button', { class: 'btn small', title: 'Call lists and docs for this campaign', onclick: (e) => openMenu(e.currentTarget, lists.length
+            ? [{ head: 'Lists & docs' }, ...lists.map((l) => ({ label: l.name + ' · ' + listProgress(l).label, run: () => listOpenFrom(c, l) }))]
+            : [{ note: 'Drop a spreadsheet of people on the campaign to make a call list, or add one from Files ▾.' }]) }, 'Lists & docs · ' + lists.length + ' ▾')));
     };
-    const activity = () => [
+    // The log and what was recently done (2026-11-25: Activity, at the bottom of Progress).
+    const logPart = () => h('div', { class: 'ccp-log' },
       h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Log'), h('span', { style: 'flex:1' }),
-        h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log a call or email'),
-        h('button', { class: 'btn small' + (reportDue(c) ? ' sk-nudge' : ''), title: reportDue(c) ? 'It’s been over a week since the last report' : 'Numbers from the log, and what you found, posted to the feed', onclick: () => openReport(c) }, reportDue(c) ? 'Write a report ·' : 'Write a report')),
+        h('button', { class: 'btn small' + (K.logOpen === c.id ? ' on' : ''), onclick: () => openLog(c) }, 'Log a call or email')),
         logBox(c)),
       (() => { const ev = tasks.filter((t) => t.done && t.doneAt).sort((a, b) => b.doneAt - a.doneAt).slice(0, 25); return ev.length ? h('section', { class: 'cc-card' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Recently done')),
-        h('div', { class: 'cc-hist' }, ev.map((t) => h('button', { class: 'cc-hist-row', onclick: () => taskWindow(t) }, h('span', {}, t.doneBy ? [h('b', {}, t.doneBy), ' finished '] : 'Finished ', h('i', {}, t.text)), h('small', {}, ago(t.doneAt)))))) : null; })()].filter(Boolean);
+        h('div', { class: 'cc-hist' }, ev.map((t) => h('button', { class: 'cc-hist-row', onclick: () => taskWindow(t) }, h('span', {}, t.doneBy ? [h('b', {}, t.doneBy), ' finished '] : 'Finished ', h('i', {}, t.text)), h('small', {}, ago(t.doneAt)))))) : null; })());
     // Pulse: health, the next milestone, blockers, overdue, the team, and what to do next (each with its button).
     const nextPhase = phases.find((g) => goalProgress(g).frac < 1);
     const nextDue = open.filter((t) => t.due).sort((a, b) => a.due.localeCompare(b.due))[0];
@@ -7916,28 +8137,23 @@
     const quiet = ins.stalls.find((x) => x.t.assigneeId);
     const ideas = [
       quiet ? [`“${shortText(quiet.t.text, 50)}” hasn’t moved in ${plural(quiet.days, 'day')} (${memberName(quiet.t.assigneeId)}).`, 'Nudge', () => ccNudge(quiet.t)] : null,
-      ins.late > 0 && c.status === 'active' ? [`At this pace it finishes ${ccDay(ins.forecast)}, ${plural(ins.late, 'day')} after the end date.`, 'See the report', () => setTabC('report')] : null,
-      nobody.length ? [`${nobody.length} open task${nobody.length === 1 ? ' has' : 's have'} nobody on ${nobody.length === 1 ? 'it' : 'them'}.`, 'Assign them', () => { K.wfilter = 'open'; setTabC('work'); }] : null,
+      nobody.length ? [`${nobody.length} open task${nobody.length === 1 ? ' has' : 's have'} nobody on ${nobody.length === 1 ? 'it' : 'them'}.`, 'Assign them', () => { K.wfilter = 'all'; setTabC('work'); }] : null,
       overdue.length ? [`${overdue.length} task${overdue.length === 1 ? ' is' : 's are'} overdue.`, 'See them', () => { K.wfilter = 'overdue'; setTabC('work'); }] : null,
       phases.find((g) => !tasksOf(g.id).length) ? [`“${phases.find((g) => !tasksOf(g.id).length).title}” has no tasks yet.`, 'Suggest tasks', (e) => suggestPlan(c, e.currentTarget)] : null,
       !phases.length ? ['There are no phases yet.', 'Suggest a plan', (e) => suggestPlan(c, e.currentTarget)] : null,
       runsIt(c) && c.status === 'active' && (!hl.said || Date.now() - hl.said.at > 7 * 864e5) ? ['No check-in this week.', 'Check in', () => checkinSheet(c)] : null,
     ].filter(Boolean);
     const teamIds = [...new Set([c.ownerId, c.assigneeId, ...(c.memberIds || []), ...castOf(c).flatMap((r) => r.memberIds), ...tasks.map((t) => t.assigneeId)].filter(Boolean))];
-    if (ideas.length) pulseBtn.append(h('span', { class: 'cc-pulse-n', title: plural(ideas.length, 'thing') + ' to do next' }, String(Math.min(ideas.length, 9))));
-    const pulse = K.pulse ? h('aside', { class: 'cc-pulse', role: 'dialog', 'aria-label': 'Campaign pulse' }, h('div', { class: 'cc-pulse-h' }, '〰 Campaign pulse', h('button', { class: 'icon-btn cc-pulse-x', 'aria-label': 'Close the pulse', html: I.close, onclick: () => { K.pulse = false; renderCamps(); } })),
-      h('div', { class: 'cc-pulse-health ' + hl.status }, h('b', {}, c.status === 'active' ? HEALTH_L[hl.status] : c.status === 'done' ? 'Finished' : 'Paused'), h('small', {}, hl.why[0] || (hl.status === 'onTrack' ? 'Healthy momentum' : ''))),
-      h('div', { class: 'cc-pulse-row' }, h('span', {}, '📅'), h('span', {}, h('small', {}, 'Next milestone'), h('b', {}, nextDue ? `${dueLabel(nextDue.due)} · ${shortText(nextDue.text, 28)}` : nextPhase ? nextPhase.title : 'None'))),
-      h('button', { class: 'cc-pulse-row', onclick: () => { K.wfilter = 'blocked'; setTabC('work'); } }, h('span', {}, '⏳'), h('span', {}, h('small', {}, 'Blockers'), h('b', {}, String(blocked.length)))),
-      h('button', { class: 'cc-pulse-row', onclick: () => { K.wfilter = 'overdue'; setTabC('work'); } }, h('span', {}, '!'), h('span', {}, h('small', {}, 'Overdue'), h('b', {}, String(overdue.length)))),
-      h('button', { class: 'cc-pulse-row cc-pulse-fc' + (ins.late > 0 ? ' bad' : ''), title: ins.forecastWhy, onclick: () => setTabC('report') }, h('span', {}, '🏁'), h('span', {}, h('small', {}, open.length ? 'Forecast finish' : 'Finished'), h('b', {}, ins.forecast ? ccDay(ins.forecast) + (ins.late > 0 ? ` · ${ins.late} d late` : '') : '—'))),
-      ins.stalls.length ? h('button', { class: 'cc-pulse-row cc-pulse-quiet', onclick: () => setTabC('report') }, h('span', {}, '💤'), h('span', {}, h('small', {}, `Quiet ${STALL_DAYS}+ days`), h('b', {}, String(ins.stalls.length)))) : null,
-      teamIds.length ? h('div', { class: 'cc-pulse-team' }, h('small', {}, 'Team'), h('div', {}, teamIds.slice(0, 6).map((id) => avatar(id)), teamIds.length > 6 ? h('small', {}, ` +${teamIds.length - 6}`) : null)) : null,
-      h('div', { class: 'cc-pulse-ai' }, h('b', {}, '✦ What to do next'),
-        ideas.length ? ideas.slice(0, 3).map(([text, label, run]) => h('div', { class: 'cc-idea' }, h('p', {}, text), h('button', { class: 'btn small primary-btn', onclick: run }, label))) : h('p', {}, 'Nothing needs you right now.'),
-        h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Ask Sidekick'))) : null;
-    // Plan: the phases as a list, or the campaign's whiteboard (2026-11-20) to sketch them and turn shapes into phases.
-    const planSwitch = toolOn('whiteboard') ? h('div', { class: 'seg seg-sm cc-planswitch' }, [['phases', 'Phases'], ['board', 'Board']].map(([k, l]) => h('button', { class: (K.planView === 'board' ? 'board' : 'phases') === k ? 'on' : null, 'data-pv': k, onclick: () => { K.planView = k; renderCamps(); } }, l))) : null;
+    // How it's going (2026-11-25, the Pulse's top): health and why, the next milestone, the team. Blockers, overdue, the
+    // forecast and what's gone quiet are in the numbers under it, so they aren't listed twice.
+    const healthPart = () => h('section', { class: 'cc-card ccp-health ' + (c.status === 'active' ? hl.status : c.status), 'aria-label': 'How it’s going' },
+      h('div', { class: 'ccp-h-state' }, h('small', {}, 'How it’s going'), h('b', {}, c.status === 'active' ? HEALTH_L[hl.status] : c.status === 'done' ? 'Finished' : 'Paused'), h('span', {}, hl.why[0] || (hl.status === 'onTrack' ? 'Healthy momentum' : ''))),
+      h('div', { class: 'ccp-h-item' }, h('small', {}, 'Next milestone'), h('b', {}, nextDue ? `${dueLabel(nextDue.due)} · ${shortText(nextDue.text, 32)}` : nextPhase ? nextPhase.title : 'None')),
+      teamIds.length ? h('div', { class: 'ccp-h-item' }, h('small', {}, 'Team'), h('div', { class: 'ccp-h-team' }, teamIds.slice(0, 6).map((id) => avatar(id)), teamIds.length > 6 ? h('small', {}, ` +${teamIds.length - 6}`) : null)) : null);
+    // What to do next: up to three, each with its button, and Sidekick.
+    const ideasPart = () => h('section', { class: 'cc-card cc-pulse-ai' }, h('b', {}, '✦ What to do next'),
+      ideas.length ? ideas.slice(0, 3).map(([text, label, run]) => h('div', { class: 'cc-idea' }, h('p', {}, text), h('button', { class: 'btn small primary-btn', onclick: run }, label))) : h('p', {}, 'Nothing needs you right now.'),
+      h('button', { class: 'btn small' + (skFor(c.id)?.nudge ? ' sk-nudge' : ''), title: skFor(c.id)?.nudge?.text || 'Talk this campaign through with Sidekick', onclick: () => sidekickFor(c) }, '✦ Ask Sidekick'));
     // Overview, in the Plan's look (2026-11-23): the brief down the left, and on the right, until something in the tree
     // is picked, what it's reaching for (targets with their numbers), money, sub-campaigns and the team.
     const ovSec = (title, ...kids) => h('div', { class: 'cc-lib-sec' }, h('h4', {}, title), ...kids);
@@ -7946,7 +8162,8 @@
       ovField('brief', 'Objective', 'What it’s for, and how you’ll know it worked…'),
       ovField('audience', 'Audience', 'Who it’s aimed at…'),
       ovField('strategy', 'Strategy', 'How you’ll get there…'),
-      ovSec('Success metrics', ...[...metrics.childNodes].filter((x) => !x.classList?.contains('cc-bh'))));
+      ovSec('Success metrics', ...[...metrics.childNodes].filter((x) => !x.classList?.contains('cc-bh'))),
+      ovSec('Where things are', where()));
     const ovIdle = () => h('aside', { class: 'cc-ppanel cc-oidle' },
       h('h3', {}, 'At a glance'),
       h('div', { class: 'cc-o-prog' }, h('b', {}, Math.round(p * 100) + '%'), h('small', {}, ` done · ${plural(open.length, 'task')} open${nextPhase ? ' · now: ' + nextPhase.title : ''}`), bar(p, c.color)),
@@ -7955,17 +8172,15 @@
       subs ? ovSec('Sub-campaigns', ...[...subs.childNodes].filter((x) => !x.classList?.contains('cc-card-h'))) : null,
       ovSec('Team and roles', castStrip(c)),
       h('small', { class: 'cc-pp-hint' }, phases.length ? 'Click a phase or a task in the plan to change it here.' : 'Add the first phase, then its tasks go under it.'));
-    if (!(tab === 'plan' && K.planView === 'board' && toolOn('whiteboard'))) ccBoardDrop();
+    if (tab !== 'sketch') ccBoardDrop();
     const body = {
-      overview: () => [sendBars(c), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })],
       // Plan (the owner's sketch, 2026-11-22): what's saved on the left, the plan as a tree of tiles, a task's panel on the right.
-      plan: () => (K.planView === 'board' && toolOn('whiteboard') ? [planSwitch, ccBoardView(c, phases)] : [planSwitch, ccPlanner(c, phases)]),
+      plan: () => [sendBars(c), (() => { const l = lists.find((x) => x.id === K.listOpen); return l ? h('section', { class: 'cc-card cc-listopen' }, listCard(c, l)) : null; })(), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })],
+      sketch: () => [ccBoardView(c, phases)],
       work: () => [sendBars(c), workBody()],
-      resources,
-      activity,
-      report: () => ccReport(c),
+      progress: () => ccReport(c, { health: healthPart(), ideas: ideasPart(), log: logPart() }),
     }[tab]();
-    return h('div', { class: 'camp-view cc' }, h('div', { class: 'cc-main' }, head, testBar(c, phases), h('div', { class: 'cc-body', 'data-tab': tab }, ...body.filter(Boolean))), pulse);
+    return h('div', { class: 'camp-view cc' }, h('div', { class: 'cc-main' }, head, testBar(c, phases), h('div', { class: 'cc-body', 'data-tab': tab }, ...body.flat().filter(Boolean))));
   }
 
   // ----- Plan: the planner (the owner's sketch, 2026-11-22) -----
@@ -8011,6 +8226,33 @@
       { id: 't-feed', label: 'Post in the campaign’s feed when it’s done', name: nm('post when done'), trigger: on('task.done'), actions: [{ kind: 'post', text: '✅ {task} is done ({campaign})', channelId: 'same' }] },
     ];
   }
+  // A short list to tap, one picked (the builder's look on the plan, 2026-11-25). Works like a <select>: .value, a
+  // change event, labelOf(value). items: [value, label, icon?, color?].
+  function paRadio(cls, label, items, init) {
+    const el = h('div', { class: 'pa-opts ' + cls, role: 'radiogroup', 'aria-label': label });
+    let v = init;
+    const btns = items.map(([k, l, ic, c]) => h('button', { type: 'button', role: 'radio', class: 'pa-opt' + (c ? ` lk-${c}` : ''), 'data-v': k,
+      onclick: (e) => { if (e.currentTarget.disabled || v === k) return; el.value = k; el.dispatchEvent(new Event('change')); } },
+    ic ? h('span', { class: 'pa-ic', 'aria-hidden': 'true' }, ic) : null, h('span', {}, l)));
+    Object.defineProperty(el, 'value', { get: () => v, set: (k) => { v = k; for (const b of btns) { b.setAttribute('aria-checked', String(b.dataset.v === k)); b.tabIndex = b.dataset.v === k ? 0 : -1; } } });
+    el.addEventListener('keydown', (e) => {
+      const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const on = btns.filter((b) => !b.disabled);
+      const next = on[(on.findIndex((b) => b.dataset.v === v) + step + on.length) % on.length];
+      if (!next || next.dataset.v === v) return;
+      el.value = next.dataset.v;
+      el.dispatchEvent(new Event('change'));
+      next.focus();
+    });
+    el.labelOf = (k) => items.find(([x]) => x === k)?.[1] || '';
+    el.append(...btns);
+    el.value = init;
+    return el;
+  }
+  // A ready-made one's icon: what it does (its first step that isn't a wait or a check).
+  const recipeLook = (r) => { const ks = []; const walk = (l) => (l || []).forEach((y) => { ks.push(y.kind); if (y.kind === 'if') walk(y.then); }); walk(r.actions); return autoLook(ks.find((k) => k !== 'wait' && k !== 'if')); };
   function ccAutoPanel(c, g, t, back) {
     const box = h('aside', { class: 'cc-ppanel cc-pauto', 'data-for': t ? 'task' : 'phase' });
     const what = t ? `“${shortText(t.text, 60)}”` : g.title;
@@ -8023,12 +8265,15 @@
       // Build one here: when, then, what it says.
       const kinds = t ? [['task.done', 'It’s done'], ['task.opened', 'It opens (what it waits for is done)'], ['task.reopened', 'It’s ticked back to not done']]
         : [['task.done', 'A task here is done'], ['task.opened', 'A task here opens'], ['step.done', 'The phase is finished']];
-      const when = h('select', { class: 'pa-when', 'aria-label': 'When' }, kinds.map(([v, l]) => opt(v, l, 'task.done')));
+      const WL = { 'task.done': ['✅', 'green'], 'task.opened': ['🔓', 'blue'], 'task.reopened': ['↩️', 'amber'], 'step.done': ['🏁', 'orange'] };
+      const when = paRadio('pa-when', 'When', kinds.map(([v, l]) => [v, l, ...WL[v]]), 'task.done');
       const members = (S.workspace.members || []).filter((m) => !m.gone);
-      const then = h('select', { class: 'pa-then', 'aria-label': 'Then' }, opt('doers', 'Tell whoever it’s for'), opt('owners', 'Tell the owners'), h('optgroup', { label: 'Tell someone' }, members.map((m) => opt('m:' + m.id, 'Tell ' + m.name))), opt('post', 'Post in the campaign’s feed'), opt('task', 'Make a task'));
+      const then = paRadio('pa-then', 'Then', [['doers', 'Tell whoever it’s for', '🔔', 'purple'], ['owners', 'Tell the owners', '👑', 'purple'], ['someone', 'Tell someone', '👤', 'pink'], ['post', 'Post in the campaign’s feed', '📣', 'teal'], ['task', 'Make a task', '✅', 'purple']], 'doers');
+      const who = h('select', { class: 'pa-who', 'aria-label': 'Who to tell' }, members.map((m) => opt(m.id, m.name, S.me?.memberId)));
+      const whoRow = h('label', { class: 'cc-pp-f pa-who-row' }, 'Who', who);
       const say = h('input', { class: 'pa-say', maxlength: 1000, 'aria-label': 'What it says' });
       const forWho = h('select', { class: 'pa-for', 'aria-label': 'Task for' }, opt('', 'Nobody yet'), opt('who', 'Whoever set it off'), members.map((m) => opt(m.id, m.name)));
-      const wait = h('select', { class: 'pa-wait', 'aria-label': 'Wait' }, opt('0', 'Right away'), opt('1', 'After 1 day'), opt('2', 'After 2 days'), opt('7', 'After a week'));
+      const wait = paRadio('pa-wait pa-chips', 'When to', [['0', 'Right away'], ['1', 'After 1 day'], ['2', 'After 2 days'], ['7', 'After a week']], '0');
       const forRow = h('label', { class: 'cc-pp-f pa-for-row' }, 'For', forWho);
       const onlyOpen = h('small', { class: 'cc-pp-hint pa-only' }, 'Only if it still isn’t done by then.');
       const sayFor = () => {
@@ -8039,10 +8284,11 @@
       let typed = false;
       say.addEventListener('input', () => (typed = !!say.value.trim()));
       const sync = () => {
-        const doers = then.querySelector('option[value=doers]');
+        const doers = then.querySelector('.pa-opt[data-v=doers]');
         doers.disabled = when.value === 'step.done';
         if (doers.disabled && then.value === 'doers') then.value = 'owners';
         forRow.hidden = then.value !== 'task';
+        whoRow.hidden = then.value !== 'someone';
         onlyOpen.hidden = !(when.value === 'task.opened' && wait.value !== '0');
         if (!typed) say.value = sayFor();
       };
@@ -8050,11 +8296,11 @@
       const draft = () => {
         const text = say.value.trim(), v = then.value;
         let act = v === 'post' ? { kind: 'post', text, channelId: 'same' } : v === 'task' ? { kind: 'task', text, assignee: forWho.value, dueIn: null, campaign: '' }
-          : { kind: 'notify', text, to: [v.startsWith('m:') ? v.slice(2) : v] };
+          : { kind: 'notify', text, to: [v === 'someone' ? who.value : v] };
         const days = Number(wait.value);
         const acts = !days ? [act] : when.value === 'task.opened' ? [{ kind: 'wait', amount: days, unit: 'days' }, { kind: 'if', when: [{ field: 'done', op: 'is', value: 'no' }], then: [act], else: [] }] : [{ kind: 'wait', amount: days, unit: 'days' }, act];
         const low1 = (x) => x.charAt(0).toLowerCase() + x.slice(1);
-        const wl = low1(kinds.find(([k]) => k === when.value)[1].replace(/ \(.*\)$/, '')), tl = low1(then.selectedOptions[0].textContent);
+        const wl = low1(kinds.find(([k]) => k === when.value)[1].replace(/ \(.*\)$/, '')), tl = then.value === 'someone' ? 'tell ' + (who.selectedOptions[0]?.textContent || 'someone') : low1(then.labelOf(then.value));
         return { name: shortText(`${t ? t.text : g.title}: ${wl}, ${tl}`, 80), trigger: paTrigger(when.value, c, g, t), actions: acts };
       };
       const saveBtn = h('button', { type: 'button', class: 'btn primary-btn pa-save', onclick: async (e) => {
@@ -8076,18 +8322,22 @@
             : h('small', { class: 'cc-pp-hint' }, `Nothing runs for ${t ? 'this task' : 'this phase'} yet.`),
           forTasks ? h('small', { class: 'cc-pp-hint pa-fortasks' }, `And ${plural(forTasks, 'automation')} for single tasks here: pick a task to see ${forTasks === 1 ? 'it' : 'them'}.`) : null),
         h('div', { class: 'pa-sec' }, h('h4', {}, 'Ready-made'),
-          h('div', { class: 'pa-recipes' }, paRecipes(c, g, t).map((r) => names.has(r.name) ? null : h('button', { type: 'button', class: 'btn small pa-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label)))),
+          h('div', { class: 'pa-recipes' }, paRecipes(c, g, t).map((r) => names.has(r.name) ? null : h('button', { type: 'button', class: 'pa-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, autoIc(recipeLook(r)), h('span', {}, r.label), h('span', { class: 'pa-plus', 'aria-hidden': 'true' }, '+'))))),
         h('div', { class: 'pa-sec pa-build' }, h('h4', {}, 'Build one here'),
-          h('label', { class: 'cc-pp-f' }, 'When', when),
-          h('label', { class: 'cc-pp-f' }, 'Then', then),
-          forRow,
-          h('label', { class: 'cc-pp-f' }, 'It says', say),
-          h('small', { class: 'cc-pp-hint' }, 'Fills in: {task} {step} {campaign} {who}'),
-          h('label', { class: 'cc-pp-f' }, 'When to', wait), onlyOpen,
-          h('div', { class: 'btns' }, saveBtn, h('button', { type: 'button', class: 'link pa-full', onclick: () => autoSheet(null, draft()) }, 'More steps: open the full builder →'))),
-        h('div', { class: 'pa-sec' }, h('h4', {}, 'Use one you have'),
+          h('div', { class: 'pa-node when' }, h('div', { class: 'pa-nh' }, h('i', { class: 'an-dot' }), 'WHEN'), h('div', { class: 'pa-nb' }, when)),
+          h('div', { class: 'pa-link', 'aria-hidden': 'true' }, h('span', {}, 'THEN')),
+          h('div', { class: 'pa-node then' }, h('div', { class: 'pa-nh' }, h('i', { class: 'an-dot' }), 'THEN'),
+            h('div', { class: 'pa-nb' }, then, whoRow, forRow,
+              h('label', { class: 'cc-pp-f' }, 'It says', say),
+              h('small', { class: 'cc-pp-hint' }, 'Fills in: {task} {step} {campaign} {who}'),
+              h('div', { class: 'cc-pp-f' }, h('span', {}, 'When to'), wait), onlyOpen)),
+          h('div', { class: 'btns' }, saveBtn)),
+        h('details', { class: 'pa-sec pa-adv', open: K.paAdv || null, ontoggle: (e) => (K.paAdv = e.currentTarget.open) }, h('summary', {}, 'Advanced settings'),
+          h('h4', {}, 'Use one you have'),
           h('div', { class: 'row2' }, pickOne, h('button', { type: 'button', class: 'btn small pa-copy-go', disabled: !mine.length, onclick: () => { const x = mine.find((y) => y.id === pickOne.value); if (!x) return pickOne.focus(); copyAutoTo(x, g, t); } }, 'Copy here')),
-          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did. Or drag one from Autos onto a ${t ? 'task' : 'phase'}.`)));
+          h('small', { class: 'cc-pp-hint' }, `A copy, so the one you have keeps running where it did.${t ? '' : ' Or use + From saved on the phase.'}`),
+          h('h4', {}, 'More steps'),
+          h('button', { type: 'button', class: 'link pa-full', onclick: () => autoSheet(null, draft()) }, 'Open this one in the full builder →')));
       sync();
     };
     if (!S.automations) api('GET', '/automations').then((r) => { S.automations = r; if (box.isConnected) draw(); }).catch(() => {});
@@ -8133,7 +8383,9 @@
         h('div', { class: 'pa-sec' }, h('h4', {}, 'From its phase'),
           h('small', { class: 'cc-pp-hint' }, rs.length ? `${plural(rs.length, 'resource')} on ${g.title}: ${rs.slice(0, 3).map(resName).join(', ')}` : `Nothing on ${g.title} yet: a call script, a doc, a template or a link.`),
           h('button', { type: 'button', class: 'link pt-phase', onclick: toPhase }, `Tools for ${shortText(g.title, 40)} →`)));
-      if (K.pfocusCl) { K.pfocusCl = false; setTimeout(() => box.querySelector('.pt-cl-add')?.focus()); }
+      // The flag clears only once a box on the page has the cursor: a second redraw (the server's answer) before the
+      // timeout would otherwise draw a new box without it (a flaky test, 2026-11-25).
+      if (K.pfocusCl) setTimeout(() => { const i = box.querySelector('.pt-cl-add'); if (i?.isConnected) { i.focus(); K.pfocusCl = false; } });
       return box;
     }
     const roots = tasksInOrder(g.id).filter((x) => !x.parentId || !taskById(x.parentId));
@@ -8165,96 +8417,140 @@
     }
     return b;
   }
-  // Overview (the owner, 2026-11-23: "the same or similar look as the plan page") is the same three columns: the
-  // brief on the left, the same tree, and on the right what it's reaching for (targets, money, sub-campaigns, the
-  // team) until a phase or a task is picked, which opens there as it does on Plan. ov = { left, idle }.
-  function ccPlanner(c, phases, ov) {
-    const key = ov ? 'osel' : 'psel';
-    if (!K[key] || K[key].c !== c.id) K[key] = { c: c.id, goal: ov ? null : phases[0]?.id || null, task: null };
-    const sel = K[key];
-    if (sel.goal && !phases.some((g) => g.id === sel.goal)) sel.goal = null;
-    if (!ov && !sel.goal) sel.goal = phases[0]?.id || null;
-    let task = sel.task && taskById(sel.task);
-    if (task && goalById(task.goalId)?.campaignId !== c.id) task = null;
-    if (!task) sel.task = null;
-    const phase = goalById(task?.goalId) || goalById(sel.goal), phaseNow = phase;
-    const redraw = () => renderCamps(true);
-    // Left: what's saved.
-    if (!ov && !SV.list && !SV.loading) loadPresets().then(() => renderCamps());
-    if (!S.automations && amAdmin() && !K.autoAsk) { K.autoAsk = true; api('GET', '/automations').then((r) => { S.automations = r; renderCamps(); }).catch(() => {}); }
-    const into = async (x, phase = phaseNow) => {
-      if (x.auto) return phase ? copyAutoTo(x.auto, phase, null) : toast('Add a phase first.');
-      if (!phase) return toast('Add a phase first, then put things in it.');
-      try {
-        const r = await api('POST', `/task-presets/${x.id}/use`, { goalId: phase.id });
-        for (const t of r.tasks) upsertTask(t);
-        toast(r.tasks.length === 1 ? `Added “${shortText(r.tasks[0].text, 50)}” to ${phase.title}` : `Added ${r.tasks.length} tasks to ${phase.title}`);
-        redraw();
-      } catch (e) { toast(e.message); }
-    };
-    const libItem = (ic, name, sub, run, drag) => {
-      const b = h('button', { type: 'button', class: 'cc-lib-item', draggable: drag ? 'true' : null, title: sub || name, onclick: run }, h('span', { class: 'cc-lib-ic', 'aria-hidden': 'true' }, ic), h('span', { class: 'cc-lib-t' }, name, sub ? h('small', {}, sub) : null));
-      // Marked as dragged inside Kloomie, so the page doesn't take it for files from the computer (and outline itself).
-      if (drag) b.addEventListener('dragstart', (e) => { K.pdrag = drag; S.internalDrag = true; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', name); });
-      if (drag) b.addEventListener('dragend', () => { K.pdrag = null; S.internalDrag = false; clearDropping(); });
-      return b;
-    };
+  // ----- Plan (2026-11-25, the owner's mockup: "simple for users before anything") -----
+  // Three columns, one page: the brief and where things are on the left (ov.left); the phases in the middle as cards,
+  // each with its tasks as rows (tick, name, who, due, status), a box to type the next task in and + From saved; on the
+  // right At a glance (ov.idle) until a task or a phase is picked, which opens there to change in place. The chips under
+  // the header (All, My tasks, Overdue, Blocked) filter the rows; a phase's count always counts the whole phase.
+  // Put something saved into a phase: a bundle's or a saved task's tasks go in; an SOP or an automation opens/copies.
+  async function ccSavedInto(c, x, phase) {
+    if (x.auto) return copyAutoTo(x.auto, phase, null);
+    try {
+      const r = await api('POST', `/task-presets/${x.id}/use`, { goalId: phase.id });
+      for (const t of r.tasks) upsertTask(t);
+      toast(r.tasks.length === 1 ? `Added “${shortText(r.tasks[0].text, 50)}” to ${phase.title}` : `Added ${r.tasks.length} tasks to ${phase.title}`);
+      renderCamps(true);
+    } catch (e) { toast(e.message); }
+  }
+  // + From saved on a phase: what Plan's old left column had (saved flows: bundles and SOPs; saved tasks; automations).
+  async function ccSavedMenu(anchor, c, g) {
+    if (!SV.list) { try { await loadPresets(); } catch (e) { return toast(e.message); } }
+    if (!S.automations && amAdmin()) { try { S.automations = await api('GET', '/automations'); } catch {} }
     const list = SV.list || [];
     const bundles = list.filter((x) => x.kind === 'bundle'), saved = list.filter((x) => x.kind === 'task');
     const sops = S.templates || [];
-    const autos = (S.automations || []).slice().sort((a, b) => (b.trigger?.campaignId === c.id) - (a.trigger?.campaignId === c.id));
-    const libSec = (title, items, empty, add) => h('div', { class: 'cc-lib-sec' }, h('h4', {}, title, add ? h('button', { type: 'button', class: 'cc-lib-new', title: add[0], 'aria-label': add[0], onclick: add[1] }, '+') : null),
-      items.length ? items : h('small', { class: 'cc-lib-empty' }, empty));
-    const lib = ov ? ov.left : h('aside', { class: 'cc-plib' },
-      libSec('Saved flows', [...bundles.map((x) => libItem('🧩', x.name, plural(x.steps.length, 'task'), () => into(x), x)), ...sops.map((t) => libItem('📖', t.name, 'SOP · ' + plural(t.goals.length, 'phase'), () => sopGuide(t.id)))],
-        SV.list ? 'Bundles of saved tasks and your SOPs show here.' : 'Loading…', ['Make a bundle', () => presetSheet(null, 'bundle')]),
-      libSec('Tasks', saved.map((x) => libItem('☐', x.name, presetSub(x), () => into(x), x)), SV.list ? 'Tasks you save show here.' : 'Loading…', ['Save a task', () => presetSheet(null, 'task')]),
-      amAdmin() ? libSec('Autos', autos.slice(0, 12).map((x) => libItem('⚡', x.name, x.trigger?.campaignId === c.id ? 'This campaign' : x.on === false ? 'Off' : '', () => autoSheet(x), { auto: x })), S.automations ? 'Automations show here.' : 'Loading…',
-        ['New automation', () => autoSheet(null, { name: `${c.name}: `, trigger: { kind: 'task.done', campaignId: c.id } })]) : null);
-    // Middle: the tree.
-    const pick = (g) => { K[key] = { c: c.id, goal: g.id, task: null }; K.pfocus = true; redraw(); };
-    const node = (t, depth) => {
-      const subs = depth < 3 ? subtasksOf(t) : [];
-      return h('div', { class: 'cc-pt-node' }, ccTile(t, sel.task, key), subs.length ? h('div', { class: 'cc-pt-kids sub' }, subs.map((x) => node(x, depth + 1))) : null);
-    };
-    const tree = h('div', { class: 'cc-ptree' },
-      phases.length ? phases.map((g, i) => {
-        const roots = tasksInOrder(g.id).filter((t) => !t.parentId || !taskById(t.parentId));
-        const gp = goalProgress(g), dn = roots.filter((t) => t.done).length;
-        const tile = h('button', { type: 'button', class: 'cc-ptile phase' + (phase?.id === g.id && !task ? ' on' : '') + (gp.frac >= 1 ? ' done' : '') + (goalBlockers(g).length ? ' waiting' : ''), 'data-phase': g.id, onclick: () => pick(g) },
-          h('span', { class: 'cc-pt-n' }, String(i + 1)),
-          h('span', { class: 'cc-pt-body' }, h('b', {}, g.title), h('small', {}, `${dn} of ${plural(roots.length, 'task')}${goalBlockers(g).length ? ' · waiting' : ''}`, S.automations && autosHere(c, g, null).length ? h('span', { class: 'cc-auto-n', title: plural(autosHere(c, g, null).length, 'automation') }, ' · ⚡' + autosHere(c, g, null).length) : null), h('span', { class: 'cc-phase-bar' }, h('i', { style: `width:${Math.round(gp.frac * 100)}%` }))),
-          h('span', { class: 'icon-btn small cc-pt-open', role: 'button', tabindex: '0', title: 'What it waits for, its job stage, resources and automations', 'aria-label': 'Phase settings for ' + g.title, html: I.more, onclick: (e) => { e.stopPropagation(); stepWindow(c, g); } }));
-        const wrap = h('div', { class: 'cc-pt-phase', 'data-id': g.id },
-          tile,
-          h('div', { class: 'cc-pt-kids' }, roots.map((t) => node(t, 0)), h('div', { class: 'cc-pt-node' }, h('button', { type: 'button', class: 'cc-pt-add', onclick: () => pick(g) }, '+ Task'))));
-        // Drop something saved on a phase: it goes in that phase.
-        wrap.addEventListener('dragover', (e) => { if (K.pdrag) { e.preventDefault(); wrap.classList.add('over'); } });
-        wrap.addEventListener('dragleave', () => wrap.classList.remove('over'));
-        wrap.addEventListener('drop', (e) => { const x = K.pdrag; K.pdrag = null; wrap.classList.remove('over'); if (!x) return; e.preventDefault(); K[key] = { c: c.id, goal: g.id, task: null }; into(x, g); });
-        return wrap;
-      }) : h('p', { class: 'day-hint' }, 'No phases yet. A phase is a stage of the work, like “Call past customers” then “Book installs”.'),
-      h('div', { class: 'goal-btns cc-pt-foot' },
-        h('button', { class: 'add-goal', onclick: () => goalSheet(c) }, '+ Add a phase'),
-        h('button', { class: 'add-goal ai-btn', title: 'Draft phases and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief')));
-    // Right: the task, or Add task.
+    const autos = amAdmin() ? (S.automations || []).slice().sort((a, b) => (b.trigger?.campaignId === c.id) - (a.trigger?.campaignId === c.id)).slice(0, 12) : [];
+    const rows = [{ head: 'Into ' + g.title }];
+    if (bundles.length || sops.length) rows.push({ head: 'Saved flows' }, ...bundles.map((x) => ({ label: `🧩 ${x.name} · ${plural(x.steps.length, 'task')}`, run: () => ccSavedInto(c, x, g) })), ...sops.map((t) => ({ label: `📖 ${t.name} · SOP`, run: () => sopGuide(t.id) })));
+    if (saved.length) rows.push({ head: 'Tasks' }, ...saved.map((x) => ({ label: '☐ ' + x.name, run: () => ccSavedInto(c, x, g) })));
+    if (autos.length) rows.push({ head: 'Automations (a copy)' }, ...autos.map((x) => ({ label: '⚡ ' + x.name, run: () => ccSavedInto(c, { auto: x }, g) })));
+    if (rows.length === 1) rows.push({ note: 'Nothing saved yet. Save a task or make a bundle and it shows here.' });
+    rows.push({ label: '+ Save a task…', run: () => presetSheet(null, 'task') }, { label: '+ Make a bundle…', run: () => presetSheet(null, 'bundle') });
+    openMenu(anchor, rows);
+  }
+  // One task as a row: tick, name (with its marks and subtasks done/all), who, due, status. A click opens its details.
+  function ccRow(c, t, sel) {
+    const g = goalById(t.goalId);
+    const [sc, sl] = ccStatus(t);
+    const blockers = taskBlockers(t);
+    const subs = subtasksOf(t);
+    const na = S.automations && g ? autosHere(c, g, t).length : 0;
+    const pick = () => { K.psel = { c: c.id, goal: t.goalId || null, task: t.id }; K.pscroll = true; renderCamps(true); };
+    const check = h('input', { type: 'checkbox', class: 'cc-row-check', checked: !!t.done, disabled: !t.done && !!blockers.length, 'aria-label': (t.done ? 'Not done: ' : 'Done: ') + t.text,
+      title: !t.done && blockers.length ? 'Waits for ' + blockers.map((x) => `“${shortText(stepName(x), 40)}”`).join(', ') : t.done ? 'Done' : 'Mark done' });
+    check.addEventListener('click', (e) => e.stopPropagation());
+    check.addEventListener('change', () => ccTaskSet(t, check.checked ? { done: true } : { done: false }));
+    return h('div', { class: `cc-row s-${sc}${t.done ? ' done' : ''}${sel.task === t.id ? ' on' : ''}`, 'data-task': t.id, role: 'button', tabindex: '0', onclick: pick, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) pick(); } },
+      check,
+      h('span', { class: 'cc-row-main' },
+        h('span', { class: 'cc-row-name' }, t.text),
+        subs.length ? h('small', { class: 'cc-row-subs', title: 'Subtasks done' }, `${subs.filter((x) => x.done).length}/${subs.length}`) : null,
+        t.wo ? h('span', { class: 'wo-chip' }, t.wo.no) : null,
+        t.test ? h('small', { class: 'step-tag test', title: 'Part of a test run: only testers get it, and Go live puts it back' }, 'TEST') : null,
+        t.action && STEP_KINDS[t.action.kind] ? h('small', { class: 'cc-tool-ic', title: 'Done with: ' + STEP_KINDS[t.action.kind].label }, TOOL_IC[t.action.kind]) : null,
+        na ? h('small', { class: 'cc-auto-n', title: plural(na, 'automation') }, '⚡' + na) : null),
+      h('span', { class: 'cc-row-who' + (ccWho(t) ? '' : ' none') }, t.assigneeId ? avatar(t.assigneeId) : null, ccWho(t) || 'Unassigned'),
+      h('span', { class: 'cc-row-due' + (isOverdue(t) ? ' late' : '') + (t.due ? '' : ' none') }, t.due ? 'Due ' + dueLabel(t.due) : ''),
+      h('span', { class: 'cc-row-status cc-status ' + sc }, sl));
+  }
+  // One phase as a card: its header (fold, name, Phase n (done/all tasks done), a thin bar, ⋯), its rows, and the foot.
+  function ccPhaseCard(c, g, i, sel, show) {
+    const roots = tasksInOrder(g.id).filter((t) => !t.parentId || !taskById(t.parentId));
+    const dn = roots.filter((t) => t.done).length;
+    const rows = show ? roots.filter((t) => show.has(t.id)).sort((a, b) => a.done - b.done) : roots;
+    const closed = K.closed.has(g.id);
+    const fold = (e) => { e.stopPropagation(); if (K.closed.has(g.id)) K.closed.delete(g.id); else K.closed.add(g.id); store.set('goalsClosed', [...K.closed].filter((id) => goalById(id))); renderCamps(true); };
+    const pickPhase = () => { K.psel = { c: c.id, goal: g.id, task: null }; K.pfocus = true; renderCamps(true); };
+    const na = S.automations ? autosHere(c, g, null).length : 0;
+    const waits = goalBlockers(g);
+    const add = h('input', { class: 'cc-phase-add', placeholder: `+ Add task to Phase ${i + 1}…`, maxlength: 500, 'aria-label': 'Add a task to ' + g.title });
+    add.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter' || !add.value.trim()) return;
+      e.preventDefault();
+      const raw = add.value;
+      add.value = '';
+      try {
+        upsertTask(await api('POST', '/tasks', { ...parseTask(raw), goalId: g.id }));
+        renderCamps(true);
+        $(`#camps .cc-phase[data-phase="${g.id}"] .cc-phase-add`)?.focus();
+      } catch (er) { add.value = raw; toast(er.message); }
+    });
+    return h('section', { class: 'cc-phase' + (closed ? ' closed' : '') + (sel.goal === g.id && !sel.task ? ' on' : '') + (waits.length ? ' waiting' : ''), 'data-phase': g.id },
+      h('div', { class: 'cc-phase-h', role: 'button', tabindex: '0', onclick: pickPhase, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) pickPhase(); } },
+        h('button', { type: 'button', class: 't-btn cc-phase-fold', 'aria-label': closed ? 'Show tasks' : 'Hide tasks', 'aria-expanded': String(!closed), html: I.down, onclick: fold }),
+        h('b', { class: 'cc-phase-t' }, g.title),
+        waits.length ? h('small', { class: 'cc-phase-wait', title: 'Opens when ' + waits.map((x) => `“${x.title}”`).join(' and ') + ' is met' }, '⏳ waiting') : null,
+        na ? h('small', { class: 'cc-auto-n', title: plural(na, 'automation') }, '⚡' + na) : null,
+        h('span', { class: 'cc-phase-meta' }, `Phase ${i + 1} (${dn}/${roots.length} tasks done)`),
+        h('span', { class: 'cc-phase-bar' }, bar(roots.length ? dn / roots.length : 0, c.color)),
+        h('button', { type: 'button', class: 'icon-btn small', title: 'What it waits for, its job stage, resources and automations', 'aria-label': 'Phase settings for ' + g.title, html: I.more, onclick: (e) => { e.stopPropagation(); stepWindow(c, g); } })),
+      closed ? null : h('div', { class: 'cc-phase-rows' },
+        rows.map((t) => ccRow(c, t, sel)),
+        roots.length && !rows.length ? h('p', { class: 'cc-phase-empty' }, 'No matching tasks') : null),
+      closed ? null : h('div', { class: 'cc-phase-foot' }, add,
+        h('button', { type: 'button', class: 'btn small cc-phase-saved', title: 'Put saved tasks, a bundle or an automation into this phase', onclick: (e) => ccSavedMenu(e.currentTarget, c, g) }, '+ From saved')));
+  }
+  function ccPlanner(c, phases, ov) {
+    if (!K.psel || K.psel.c !== c.id) K.psel = { c: c.id, goal: null, task: null };
+    const sel = K.psel;
+    if (sel.goal && !phases.some((g) => g.id === sel.goal)) sel.goal = null;
+    let task = sel.task && taskById(sel.task);
+    if (task && goalById(task.goalId)?.campaignId !== c.id) task = null;
+    if (!task) sel.task = null;
+    const phase = goalById(task?.goalId) || goalById(sel.goal);
+    const redraw = () => renderCamps(true);
+    if (!S.automations && amAdmin() && !K.autoAsk) { K.autoAsk = true; api('GET', '/automations').then((r) => { S.automations = r; renderCamps(); }).catch(() => {}); }
+    // Middle: the phases.
+    const chip = ccChipOf(K.wfilter);
+    // A subtask that matches keeps the row of the task it hangs under (rows are top-level tasks).
+    const rootOf = (t) => { let x = t; for (let i = 0; i < 4 && x.parentId && taskById(x.parentId); i++) x = taskById(x.parentId); return x; };
+    const show = chip === 'all' ? null : new Set(ccChipPick(campTasks(c), chip).map((t) => rootOf(t).id));
+    const tree = h('div', { class: 'cc-phases' },
+      h('div', { class: 'cc-phases-bar' },
+        h('button', { class: 'btn small cc-addphase', onclick: () => goalSheet(c) }, '+ Add Phase'),
+        h('button', { class: 'btn small ai-btn', title: 'Draft phases and tasks from the brief', onclick: (e) => suggestPlan(c, e.currentTarget) }, '✨ Suggest from the brief'),
+      ),
+      phases.length ? phases.map((g, i) => ccPhaseCard(c, g, i, sel, show)) : h('p', { class: 'day-hint' }, 'No phases yet. A phase is a stage of the work, like “Call past customers” then “Book installs”.'),
+      phases.length ? h('button', { class: 'cc-phase-new', onclick: () => goalSheet(c) }, '+ Add Phase') : null);
+    // Right: the task picked, the phase picked (Add task), or At a glance.
     const members = (S.workspace.members || []).filter((m) => !m.gone);
     const whoSel = (v) => h('select', { class: 'cc-pp-who', 'aria-label': 'Who' }, h('option', { value: '' }, 'Nobody yet'), members.map((m) => h('option', { value: m.id, selected: v === m.id }, m.name)));
-    const foot = h('div', { class: 'cc-pp-foot' },
-      phase ? h('button', { type: 'button', class: 'btn cc-pp-tool', title: task ? 'What this task is done with, and its checklist' : 'Resources, what it needs, and a tool for each task', onclick: () => { K[key] = { ...sel, tools: true, autos: false }; redraw(); } }, '🧰 Add tool') : null,
-      phase && amAdmin() ? h('button', { type: 'button', class: 'btn cc-pp-auto', title: task ? 'Automations for this task' : 'Automations for this phase', onclick: () => { K[key] = { ...sel, autos: true, tools: false }; redraw(); } }, '⚡ Add automation') : null);
+    const foot = (extra) => h('div', { class: 'cc-pp-foot' },
+      phase ? h('button', { type: 'button', class: 'btn cc-pp-tool', title: task ? 'What this task is done with, and its checklist' : 'Resources, what it needs, and a tool for each task', onclick: () => { K.psel = { ...sel, tools: true, autos: false }; redraw(); } }, '🧰 Add tool') : null,
+      phase && amAdmin() ? h('button', { type: 'button', class: 'btn cc-pp-auto', title: task ? 'Automations for this task' : 'Automations for this phase', onclick: () => { K.psel = { ...sel, autos: true, tools: false }; redraw(); } }, '⚡ Add automation') : null,
+      extra);
     let panel;
     if (sel.tools && phase) {
-      panel = ccToolPanel(c, phase, task, () => { K[key] = { ...sel, tools: false }; redraw(); }, () => { K[key] = { c: c.id, goal: phase.id, task: null, tools: true }; redraw(); });
+      panel = ccToolPanel(c, phase, task, () => { K.psel = { ...sel, tools: false }; redraw(); }, () => { K.psel = { c: c.id, goal: phase.id, task: null, tools: true }; redraw(); });
     } else if (sel.autos && phase && amAdmin()) {
-      panel = ccAutoPanel(c, phase, task, () => { K[key] = { ...sel, autos: false }; redraw(); });
+      panel = ccAutoPanel(c, phase, task, () => { K.psel = { ...sel, autos: false }; redraw(); });
     } else if (task) {
       const t = task;
-      const name = h('input', { class: 'cc-pp-name', value: t.text, maxlength: 500, 'aria-label': 'Task' });
+      const name = h('input', { class: 'cc-pp-name', value: t.text, maxlength: 500, 'aria-label': 'Task title' });
       name.addEventListener('change', () => name.value.trim() && name.value.trim() !== t.text && ccTaskSet(t, { text: name.value.trim() }));
       const who = whoSel(t.assigneeId);
       who.addEventListener('change', () => ccTaskSet(t, { assigneeId: who.value || null }));
-      const due = h('input', { type: 'date', class: 'cc-pp-due', value: t.due || '', 'aria-label': 'Due' });
+      const due = h('input', { type: 'date', class: 'cc-pp-due', value: t.due || '', 'aria-label': 'Due date' });
       due.addEventListener('change', () => ccTaskSet(t, { due: due.value || null }));
       const blockers = taskBlockers(t);
       const st = t.done ? 'done' : t.status === 'doing' ? 'doing' : 'todo';
@@ -8268,16 +8564,48 @@
         subAdd.value = '';
         try { upsertTask(await api('POST', '/tasks', { text, parentId: t.id, goalId: t.goalId || null, assigneeId: t.assigneeId || null })); K.pfocusSub = true; redraw(); } catch (er) { subAdd.value = text; toast(er.message); }
       });
-      panel = h('aside', { class: 'cc-ppanel' },
-        h('div', { class: 'cc-pp-h' }, h('small', {}, phase ? phase.title : 'Task'), h('button', { class: 'icon-btn small', 'aria-label': 'Close the task', html: I.close, onclick: () => { K[key] = { ...sel, task: null, goal: ov ? null : sel.goal }; redraw(); } })),
-        h('label', { class: 'cc-pp-f' }, 'Task', name),
-        h('div', { class: 'row2' }, h('label', { class: 'cc-pp-f' }, 'Who', who), h('label', { class: 'cc-pp-f' }, 'Due', due)),
+      const subRow = (x) => {
+        const cb = h('input', { type: 'checkbox', checked: !!x.done, disabled: !x.done && !!taskBlockers(x).length, 'aria-label': (x.done ? 'Not done: ' : 'Done: ') + x.text });
+        cb.addEventListener('change', () => ccTaskSet(x, { done: cb.checked }));
+        return h('div', { class: 'cc-td-sub' + (x.done ? ' done' : '') }, cb, h('button', { type: 'button', class: 'linkish cc-td-sub-name', title: 'Open it here', onclick: () => { K.psel = { c: c.id, goal: x.goalId || t.goalId || null, task: x.id }; redraw(); } }, x.text));
+      };
+      const notes = h('textarea', { class: 'cc-td-notes', rows: 4, maxlength: 8000, placeholder: t.wo ? 'Instructions for the work order…' : 'Notes: what “done” looks like, links, anything they need to know…', 'aria-label': 'Notes' });
+      notes.value = t.description || '';
+      // Saved without drawing the page again: notes show nowhere else on it, and a redraw on blur would eat the click that
+      // caused the blur (a row's tick, a chip).
+      notes.addEventListener('blur', () => { const cur = taskById(t.id) || t; if (notes.value.trim() !== (cur.description || '').trim()) patchTask(cur, { description: notes.value }).catch((er) => toast(er.message)); });
+      const files = taskFiles(t);
+      const pickFile = h('input', { type: 'file', multiple: true, hidden: true });
+      pickFile.addEventListener('change', () => { if (pickFile.files.length) attachToTask(t, [...pickFile.files]).then(redraw); });
+      const drop = h('div', { class: 'cc-td-drop', role: 'button', tabindex: '0', onclick: () => pickFile.click(), onkeydown: (e) => { if (e.key === 'Enter') pickFile.click(); } }, '⇪ Drop files here, or click to add');
+      drop.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); e.stopPropagation(); drop.classList.add('over'); } });
+      drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+      drop.addEventListener('drop', (e) => { drop.classList.remove('over'); const fs = [...(e.dataTransfer?.files || [])]; if (!fs.length) return; e.preventDefault(); e.stopPropagation(); attachToTask(t, fs).then(redraw); });
+      const del = h('button', { type: 'button', class: 'btn danger cc-td-del', 'data-label': '1', onclick: () => confirmClick(del, async () => {
+        try {
+          await api('DELETE', '/tasks/' + t.id);
+          S.tasks = S.tasks.filter((x) => x.id !== t.id).map((x) => (x.parentId === t.id ? { ...x, parentId: undefined } : x));
+          for (const e of S.entries) if (e.taskId === t.id) e.taskId = null;
+          K.psel = { c: c.id, goal: null, task: null };
+          renderDay(); redraw(); toast('Deleted');
+        } catch (er) { toast(er.message); }
+      }) }, 'Delete task');
+      panel = h('aside', { class: 'cc-ppanel cc-td', 'aria-label': 'Task details' },
+        h('div', { class: 'cc-pp-h' }, h('span', {}, h('b', {}, 'Task details'), phase ? h('small', {}, ' · ' + phase.title) : null), h('button', { class: 'icon-btn small', 'aria-label': 'Close the task', html: I.close, onclick: () => { K.psel = { c: c.id, goal: null, task: null }; redraw(); } })),
+        h('label', { class: 'cc-pp-f' }, 'Title', name),
+        h('div', { class: 'row2' }, h('label', { class: 'cc-pp-f' }, 'Assignee', who), h('label', { class: 'cc-pp-f' }, 'Due date', due)),
         h('div', { class: 'cc-pp-f' }, h('span', {}, 'Status'), status),
-        blockers.length ? h('small', { class: 'cc-pp-wait' }, 'Waits for ' + blockers.map((x) => `“${shortText(x.text, 40)}”`).join(', ')) : null,
-        h('div', { class: 'cc-pp-f' }, h('span', {}, 'Subtasks'), subs.length ? h('div', { class: 'cc-pp-subs' }, subs.map((x) => ccTile(x, sel.task, key))) : null, subAdd),
-        h('button', { type: 'button', class: 'link cc-pp-more', onclick: () => taskWindow(t) }, 'Open the whole task: notes, files, checklist, what it waits for →'),
-        foot);
+        blockers.length ? h('small', { class: 'cc-pp-wait' }, 'Waits for ' + blockers.map((x) => `“${shortText(stepName(x), 40)}”`).join(', ')) : null,
+        h('div', { class: 'cc-pp-f' }, h('span', {}, 'Subtasks'), subs.length ? h('div', { class: 'cc-td-subs' }, subs.map(subRow)) : null, subAdd),
+        h('label', { class: 'cc-pp-f' }, t.wo ? 'Instructions' : 'Notes', notes),
+        h('div', { class: 'cc-pp-f' }, h('span', {}, 'Attachments'),
+          files.length ? h('div', { class: 'cc-td-files' }, files.map((it) => h('button', { type: 'button', class: 'pill pill-btn', title: 'Open', onclick: () => openPreview(it) }, '📎 ' + (it.name || 'Note')))) : null,
+          drop, pickFile),
+        foot(h('span', { class: 'cc-td-foot2' },
+          h('button', { type: 'button', class: 'btn cc-td-full', title: 'Comments, checklist, what it waits for, time and more', onclick: () => taskWindow(t) }, 'Open full'),
+          del)));
       if (K.pfocusSub) { K.pfocusSub = false; setTimeout(() => subAdd.isConnected && subAdd.focus()); }
+      if (K.pscroll) { K.pscroll = false; if (!document.body.classList.contains('wide')) setTimeout(() => panel.isConnected && panel.scrollIntoView({ block: 'start' })); }
     } else if (phase) {
       const name = h('input', { class: 'cc-pp-name', placeholder: 'What needs doing?', maxlength: 500, 'aria-label': 'New task' });
       const who = whoSel('');
@@ -8293,19 +8621,17 @@
       };
       name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
       panel = h('aside', { class: 'cc-ppanel' },
-        h('div', { class: 'cc-pp-addh' }, h('h3', {}, 'Add task', h('small', {}, ' to ' + phase.title)), ov ? h('button', { class: 'icon-btn small', 'aria-label': 'Back to the overview', html: I.close, onclick: () => { K[key] = { c: c.id, goal: null, task: null }; redraw(); } }) : null),
+        h('div', { class: 'cc-pp-addh' }, h('h3', {}, 'Add task', h('small', {}, ' to ' + phase.title)), h('button', { class: 'icon-btn small', 'aria-label': 'Back to at a glance', html: I.close, onclick: () => { K.psel = { c: c.id, goal: null, task: null }; redraw(); } })),
         h('label', { class: 'cc-pp-f' }, 'Task', name),
         h('div', { class: 'row2' }, h('label', { class: 'cc-pp-f' }, 'Who', who), h('label', { class: 'cc-pp-f' }, 'Due', due)),
         h('button', { type: 'button', class: 'btn primary-btn cc-pp-add', onclick: add }, 'Add task'),
-        h('small', { class: 'cc-pp-hint' }, 'Or pick something saved on the left to drop it into this phase. Click a task to change it here.'),
-        foot);
+        h('small', { class: 'cc-pp-hint' }, 'Or use + From saved on the phase. Click a task to change it here.'),
+        foot());
       if (K.pfocus) { K.pfocus = false; setTimeout(() => name.isConnected && name.focus()); }
-    } else if (ov) {
-      panel = ov.idle;
     } else {
-      panel = h('aside', { class: 'cc-ppanel' }, h('h3', {}, 'Start with a phase'), h('p', { class: 'day-hint' }, 'Add the first phase, then its tasks go under it.'), h('button', { class: 'btn primary-btn', onclick: () => goalSheet(c) }, '+ Add a phase'), foot);
+      panel = ov.idle;
     }
-    return h('div', { class: 'cc-planner' + (ov ? ' cc-ov' : '') }, lib, tree, panel);
+    return h('div', { class: 'cc-planner cc-ov' }, ov.left, tree, panel);
   }
 
   function goalCard(c, g) {
@@ -8523,7 +8849,7 @@
           h('button', { class: 'res-open', onclick: () => { closeSheet(); autoSheet(x); } }, h('span', { class: 'res-ic' }, x.on ? '⚡' : '⏸'), h('span', {}, h('b', {}, x.name), h('small', {}, autoWhenLabel(x.trigger.kind) + (x.on ? '' : ' · off')))),
           h('label', { class: 'toggle', title: x.on ? 'On' : 'Off' }, h('input', { type: 'checkbox', checked: !!x.on, onchange: async (e) => { try { const y = await api('PATCH', '/automations/' + x.id, { on: e.target.checked }); S.automations = S.automations.map((z) => (z.id === y.id ? y : z)); draw(); renderAutos(); } catch (er) { e.target.checked = !e.target.checked; toast(er.message); } } }), h('i'))))) : '',
         h('div', { class: 'picks-h' }, 'Ready-made'),
-        h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, '+ ' + r.label))),
+        h('div', { class: 'step-recipes' }, stepRecipes(c, g).map((r) => have.has(r.name) ? null : h('button', { class: 'btn small step-recipe', 'data-recipe': r.id, onclick: (e) => make(r, e.currentTarget) }, autoIc(recipeLook(r)), h('span', {}, r.label)))),
         h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn small step-auto-new', onclick: () => { closeSheet(); autoSheet(null, { name: `${g.title}: `, trigger: { kind: 'task.opened', campaignId: c.id, step: g.title } }); } }, '+ New automation for this step')));
     };
     if (!S.automations) api('GET', '/automations').then((list) => { S.automations = list; if (box.isConnected) draw(); }).catch(() => {});
@@ -8539,7 +8865,9 @@
     t = taskById(t.id) || t;
     const g = goalById(t.goalId);
     const camp = g && campById(g.campaignId);
-    const redraw = () => { const sc = $('#sheet .sheet')?.scrollTop || 0; taskWindow(taskById(t.id) || t); const el = $('#sheet .sheet'); if (el) el.scrollTop = sc; };
+    // Only while it's still open on this task: a save that answers after the window was closed (or another opened)
+    // drew it open again (2026-11-25).
+    const redraw = () => { if (!$(`#sheet:not(.hidden) .task-win[data-task="${t.id}"]`)) return; const sc = $('#sheet .sheet')?.scrollTop || 0; taskWindow(taskById(t.id) || t); const el = $('#sheet .sheet'); if (el) el.scrollTop = sc; };
     const save = async (changes) => { await patchTask(taskById(t.id) || t, changes); redraw(); };
     const text = h('input', { class: 'win-title', value: t.text, maxlength: 500, 'aria-label': 'Task' });
     text.addEventListener('change', () => text.value.trim() && save({ text: text.value.trim() }));
@@ -9284,6 +9612,16 @@
   }
   const draggableKind = (l) => ['calls', 'tracker', 'checklist'].includes(kindOf(l));
 
+  // Open a list the way its card does: a reference in the dock, a form as a log; a call list, tracker or checklist
+  // opens on the campaign's Plan (2026-11-25: Resources folded into Plan).
+  function listOpenFrom(c, l) {
+    const k = kindOf(l);
+    if (k === 'reference') return dockOpen(c, { type: 'list', id: l.id });
+    if (k === 'form') return openLog(c, { ask: true });
+    K.listOpen = l.id; K.runOpen = null; K.ctab = 'plan';
+    renderCamps();
+    setTimeout(() => $('#camps .cc-listopen')?.scrollIntoView({ block: 'start' }));
+  }
   function listCard(c, l) {
     const k = kindOf(l);
     const p = listProgress(l);
@@ -9649,8 +9987,15 @@
       { label: file ? 'Remove (the file stays)' : 'Remove', danger: true, run: () => api('DELETE', '/lists/' + l.id).catch((e) => toast(e.message)) },
     ].filter(Boolean));
   }
+  // The log lives on Progress (2026-11-25): starting it from Plan or Work (a list, a note, a follow-up) goes there.
+  function ccToLog(c) {
+    if (K.open !== c.id || ccTabOf(K.ctab) === 'progress') return;
+    K.ctab = 'progress';
+    setTimeout(() => $('#camps .ccp-log')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
+  }
   function logRow(c, l, r) {
     K.logOpen = c.id;
+    ccToLog(c);
     K.logFrom[c.id] = l.id;
     K.pick = { listId: l.id, rowId: r.id };
     renderCamps();
@@ -9756,6 +10101,7 @@
   function addToNote(c, text) {
     K.noteDraft[c.id] = [K.noteDraft[c.id], text].filter(Boolean).join(' · ');
     K.logOpen = c.id;
+    ccToLog(c);
     const inp = $('#camps .log-note');
     if (inp) inp.value = K.noteDraft[c.id];
     else renderCamps();
@@ -10067,6 +10413,7 @@
     if (K.open !== c.id || !campsShown()) openCampaign(c.id);
     if (r) return logRow(c, l, r);
     K.logOpen = c.id;
+    ccToLog(c);
     K.logFrom[c.id] = 'blank';
     K.pick = null;
     renderCamps();
@@ -10087,6 +10434,7 @@
 
   function openLog(c, { ask = false } = {}) {
     K.logOpen = ask || K.logOpen !== c.id ? c.id : null;
+    if (K.logOpen) ccToLog(c);
     if (ask) K.askOpen = true;
     if (!K.logOpen) K.book = null;
     renderCamps();
@@ -10376,7 +10724,7 @@
     const boardPick = h('input', { type: 'checkbox' });
     boardPick.checked = D.board;
     boardPick.addEventListener('change', () => { D.board = boardPick.checked; });
-    const boardOpt = isNew && toolOn('whiteboard') ? h('label', { class: 'pick cb-board-pick' }, boardPick, 'Sketch it on a board after it’s made (Plan → Board: shapes become phases, stickies become tasks)') : null;
+    const boardOpt = isNew && ccSketchOn() ? h('label', { class: 'pick cb-board-pick' }, boardPick, 'Start from a sketch: open it on Sketch with its phases drawn out, to add to and Update plan') : null;
     const testersBox = h('div', { class: 'cb-people cb-testers' });
     const drawTesters = () => testersBox.replaceChildren(...(D.launch === 'test' ? S.workspace.members.map((m) => {
       const on = D.testers.includes(m.id);
@@ -10552,7 +10900,10 @@
         if (D.launch === 'test' && !main) {
           try { const y = await api('POST', `/campaigns/${saved.id}/test`, { testers: D.testers }); const j = S.campaigns.findIndex((x) => x.id === y.id); if (j >= 0) S.campaigns[j] = y; } catch (e) { toast(e.message); }
         }
-        if (D.board) { K.ctab = 'plan'; K.planView = 'board'; }
+        if (D.board && ccSketchOn()) {
+          try { await wbMake({ template: 'phases', campaignId: saved.id }); } catch (e) { toast(e.message); }
+          K.ctab = 'sketch';
+        }
       }
       const tabNow = K.ctab;
       openCampaign(saved.id);
@@ -10896,6 +11247,8 @@
     dir: { icon: '📁', name: 'Folder', label: (id) => dirById(id)?.name, open: (id) => openDirSide(id), full: (id) => openFolder(id) },
     // An agent pinned here answers in the chat: tapping it starts a message to it ("@Chief of Staff …").
     agent: { icon: '🤖', name: 'Agent', label: () => null, open: (id) => chatAskAgent(id), full: (id) => agOpen(id) },
+    // A job pinned here (PHASE4.md §4): its name and the step it's at; tapping it opens the job.
+    job: { icon: '🛠️', name: 'Job', label: () => null, open: (id) => jbOpenById(id), full: (id) => jbOpenById(id) },
   };
   function chatAskAgent(id) {
     const name = agentList().find((x) => x.key === id)?.name;
@@ -10909,7 +11262,7 @@
   const agentList = () => S.workspace?.agentList || []; // the server's one list of agents
   const chatFeedKey = () => viewChannel(C.view || 'chat') || 'general';
   const chatPins = () => (chatFeedKey() === 'general' ? S.workspace?.chatPins : channelById(chatFeedKey())?.pins) || [];
-  const chatPinName = (p) => (p.locked ? 'Private' : CHAT_PIN[p.kind]?.label(p.id) || p.label || CHAT_PIN[p.kind]?.name);
+  const chatPinName = (p) => (p.locked ? 'Private' : CHAT_PIN[p.kind]?.label(p.id) || (p.kind === 'job' && p.next ? `${p.label} · ${p.next}` : p.label) || CHAT_PIN[p.kind]?.name);
   function drawChatPins() {
     if (!C.pinbar) return;
     const pins = chatPins().filter((p) => CHAT_PIN[p.kind]);
@@ -12411,7 +12764,8 @@
     const sendIt = async () => {
       if (!box.value.trim()) return;
       try {
-        const t = await api('POST', `/contacts/${x.id}/texts`, { body: box.value });
+        const t = await sendOk('POST', `/contacts/${x.id}/texts`, { body: box.value });
+        if (!t || t.alreadySent) return;
         box.value = '';
         msgs = [...msgs.filter((y) => y.id !== t.id), t];
         draw(msgs);
@@ -13539,7 +13893,7 @@
   }
 
   // ---------- tools: small apps that open in a drawer, so the tabs stay as they are ----------
-  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, inventory: { name: 'Inventory', render: () => inventoryTool() }, automations: { name: 'Automations', render: () => automationsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, chat: { name: 'Chat', render: () => [chatInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
+  const TOOLS = { agents: { name: 'Your team', render: agentsTool }, hq: { name: 'Company HQ', render: hqTool }, sidekick: { name: 'Sidekick', render: sidekickTool }, docs: { name: 'Folders & Docs', render: docsTool }, bills: { name: 'Finance', render: financeTool }, contacts: { name: 'Contacts', render: contactsTool }, email: { name: 'Email', render: emailTool }, meetings: { name: 'Meeting notes', render: meetingsTool }, planner: { name: 'Planner', render: plannerTool }, folders: { name: 'Folders & Docs', render: foldersTool }, map: { name: 'Map', render: mapTool }, signs: { name: 'Signatures', render: signsTool }, cards: { name: 'Business card', render: cardTool }, templates: { name: 'Templates', render: () => templatesTool() }, inventory: { name: 'Inventory', render: () => inventoryTool() }, automations: { name: 'Automations', render: () => automationsTool() }, jobs: { name: 'Jobs', render: () => jobsTool() }, column: { name: 'Stacks', render: () => [stacksInSplit()] }, chat: { name: 'Chat', render: () => [chatInSplit()] }, tools: { name: 'Tools', render: toolsPage }, vault: { name: 'Vault', render: vaultTool }, news: { name: 'News', render: () => NEWS.render() } };
   let toolOpen = null;
   // The split (the owner, 2026-11-16): Tools, and every tool in it or in Settings → Business, opens in a panel on the
   // right of whatever page is showing, wherever it's opened from (a link, Home, Sidekick, Settings), with a button to
@@ -14798,6 +15152,7 @@
   }
   function openTool(name) {
     if (name === 'sidekick') return openDock('plan');
+    if (name === 'chat') return openChat(); // the page already, or the split
     if (SPLIT_TOOLS.has(name)) return openSplit(name);
     toolOpen = name;
     $('#settings').classList.add('hidden');
@@ -14850,6 +15205,8 @@
   // Chat in the split (2026-11-20): #chat moves in while it's showing and back (hidden) when it closes. Opening it
   // goes to the feed you were on, or the one asked for.
   function openChat(view) {
+    // Chat is already the page: there's one Chat, so the feed opens right there.
+    if (S.tab === 'chat' && splitOpen !== 'chat') return openChannel(view || C.view);
     if (splitOpen !== 'chat') openSplit('chat');
     openChannel(view || C.view);
   }
@@ -14859,7 +15216,7 @@
     el.classList.remove('hidden');
     return el;
   }
-  const chatHome = () => { const el = $('#chat'); if ($('#split').contains(el)) { keepPanesScroll(el, false); $('#main').insertBefore(el, $('#campsWrap')); } el.classList.add('hidden'); };
+  const chatHome = () => { const el = $('#chat'); if ($('#split').contains(el)) { keepPanesScroll(el, false); $('#main').insertBefore(el, $('#campsWrap')); } el.classList.toggle('hidden', S.tab !== 'chat'); };
   function stacksInSplit() {
     const p = $('#panes');
     keepPanesScroll(p, !$('#split').contains(p) || p.classList.contains('hidden'));
@@ -15808,7 +16165,11 @@
     return recs.sort((a, b) => { const x = key(a), y = key(b); const d = x < y ? -1 : x > y ? 1 : 0; return v.sort?.dir === 'desc' ? -d : d; });
   }
   // A value as text: for search, export, and showing.
+  // Members don't see prices (docs/jobflows/PRICES.md): the server sends price lines as what and how many
+  // ({ rows, hidden }) and leaves other priced fields empty, named in the record's hiddenFields.
+  const pricesHidden = (r, f) => !!(r?.values?.[f.id]?.hidden || r?.hiddenFields?.includes(f.id));
   function prText(p, f, v) {
+    if (v?.hidden) return `${v.rows?.length || 0} line${v.rows?.length === 1 ? '' : 's'}`;
     if (v == null || v === '') return '';
     if (f.type === 'money') return money(v);
     if (f.type === 'select') return f.choices.find((c) => c.id === v)?.label || '';
@@ -15856,6 +16217,7 @@
   const pjChip = (c) => h('span', { class: 'pj-chip', style: `--c:${PF_COLOR[c.color] || PF_COLOR.gray}` }, c.label);
   // A value as it shows in a cell or card.
   function prShow(p, f, v, r) {
+    if (pricesHidden(r, f) || v?.hidden) return h('span', { class: 'pj-num muted', title: 'Prices are for owners and admins' }, '—');
     if (v == null || v === '' || (Array.isArray(v) && !v.length)) return f.type === 'signature' ? signPending(r, f) : null;
     if (f.type === 'select') { const c = f.choices.find((x) => x.id === v); return c ? pjChip(c) : null; }
     if (f.type === 'multi') return v.map((id) => f.choices.find((x) => x.id === id)).filter(Boolean).map(pjChip);
@@ -16081,7 +16443,7 @@
     const cols = [prField(t, t.primary), ...t.fields.filter((f) => f.id !== t.primary && !f.hidden)];
     const recs = prShown(p, t, v);
     const shown = recs.slice(0, 500);
-    const sum = (f) => recs.reduce((n, r) => n + (f.type === 'items' ? (r.values[f.id] ? itemsTotals(r.values[f.id]).total : 0) : Number(r.values[f.id]) || 0), 0);
+    const sum = (f) => recs.reduce((n, r) => n + (pricesHidden(r, f) ? 0 : f.type === 'items' ? (r.values[f.id] ? itemsTotals(r.values[f.id]).total : 0) : Number(r.values[f.id]) || 0), 0);
     return [h('div', { class: 'pj-table-wrap' }, h('table', { class: 'pj-table' },
       h('thead', {}, h('tr', {}, cols.map((f) => h('th', { class: f.id === t.primary ? 'pj-first' : null }, h('button', { class: 'pj-th', onclick: (e) => prFieldMenu(e, p, t, v, f) }, h('span', { class: 'pj-fic' }, PF_IC[f.type]), f.name, v.sort?.field === f.id ? (v.sort.dir === 'asc' ? ' ↑' : ' ↓') : ''))),
         h('th', { class: 'pj-addcol' }, h('button', { class: 'pj-th', title: 'Add a field', onclick: () => prAddField(p, t) }, '+')))),
@@ -16092,7 +16454,7 @@
           cell.addEventListener('click', (e) => { if (e.target.closest('a, .pj-link')) return; prEdit(cell, p, t, r, f); });
           return h('td', {}, cell);
         }), h('td', {})))),
-      h('tfoot', {}, h('tr', {}, cols.map((f, i) => h('td', {}, i === 0 ? h('button', { class: 'pj-newrow', onclick: () => prNew(p, t) }, `+ New`) : f.type === 'money' || f.type === 'number' || f.type === 'items' ? h('small', { class: 'pj-num' }, f.type === 'number' ? sum(f).toLocaleString() : money(sum(f))) : '')), h('td', {}))))),
+      h('tfoot', {}, h('tr', {}, cols.map((f, i) => h('td', {}, i === 0 ? h('button', { class: 'pj-newrow', onclick: () => prNew(p, t) }, `+ New`) : f.type === 'money' || f.type === 'number' || f.type === 'items' ? h('small', { class: 'pj-num' }, recs.some((r) => pricesHidden(r, f)) ? '—' : f.type === 'number' ? sum(f).toLocaleString() : money(sum(f))) : '')), h('td', {}))))),
       h('p', { class: 'day-hint pj-count' }, `${recs.length.toLocaleString()} ${recs.length === 1 ? (t.singular || 'record').toLowerCase() : t.name.toLowerCase()}${shown.length < recs.length ? ` · showing the first ${shown.length}, search to narrow it down` : ''}`)];
   }
   // ----- board -----
@@ -16590,7 +16952,7 @@
     if (!g) return [h('p', { class: 'day-hint' }, 'A board needs a field with options, like Stage.')];
     const recs = prShown(p, t, v);
     const sumF = t.fields.find((f) => f.type === 'money') || t.fields.find((f) => f.type === 'items');
-    const val = (r) => (!sumF ? 0 : sumF.type === 'items' ? (r.values[sumF.id] ? itemsTotals(r.values[sumF.id]).total : 0) : r.values[sumF.id] || 0);
+    const val = (r) => (!sumF || pricesHidden(r, sumF) ? 0 : sumF.type === 'items' ? (r.values[sumF.id] ? itemsTotals(r.values[sumF.id]).total : 0) : r.values[sumF.id] || 0);
     const cardFields = t.fields.filter((f) => f.id !== t.primary && f.id !== g.id && !f.hidden).slice(0, 4);
     const cols = [...(recs.some((r) => !r.values[g.id]) ? [{ id: '', label: `No ${g.name.toLowerCase()}`, color: 'gray' }] : []), ...g.choices];
     const board = h('div', { class: 'pj-board' });
@@ -16903,6 +17265,7 @@
       title,
       t.scan ? assetBar(p, t, r) : null,
       custFields.length ? prVisitBar(p, t, r) : null,
+      jbRunCard(p, t, r), // a job's flow, above its tabs: where it is stays in sight whichever tab Next opens
       tabBar,
       h('div', { class: 'pj-tab-body', role: tabBar ? 'tabpanel' : null }, ...body),
       h('small', { class: 'pj-meta' }, `Added by ${r.by} · ${ago(r.createdAt)}${r.updatedAt > r.createdAt + 1000 ? ` · changed ${ago(r.updatedAt)}` : ''}${r.extId ? ` · from another app (${r.extId})` : ''}`));
@@ -17399,7 +17762,7 @@
   function pipelineOf(p, t) {
     const g = t.fields.find((f) => f.id === t.views.find((v) => v.kind === 'board')?.groupBy) || t.fields.find((f) => f.type === 'select' && /^(stage|status)$/.test(f.key)) || t.fields.find((f) => f.type === 'select');
     const mf = t.fields.find((f) => f.type === 'money') || t.fields.find((f) => f.type === 'items');
-    const amt = (r) => (!mf || r.values[mf.id] == null ? 0 : mf.type === 'items' ? itemsTotals(r.values[mf.id]).total : r.values[mf.id]);
+    const amt = (r) => (!mf || r.values[mf.id] == null || pricesHidden(r, mf) ? 0 : mf.type === 'items' ? itemsTotals(r.values[mf.id]).total : r.values[mf.id]);
     const recs = prRecs(p.id).filter((r) => r.typeId === t.id);
     const stages = g ? g.choices.map((c) => { const xs = recs.filter((r) => r.values[g.id] === c.id); return { label: c.label, color: c.color, count: xs.length, total: xs.reduce((n, r) => n + amt(r), 0) }; }) : [];
     return { g, mf, amt, recs, stages };
@@ -17526,6 +17889,12 @@
   // Line items in a record's panel: lines to type in or pick from the price list, a discount, tax, the total,
   // and (for estimates) what it costs us and the margin. It saves a moment after each change.
   function prItems(p, t, r, f) {
+    if (!amAdmin()) {
+      const rows = r.values[f.id]?.rows || [];
+      return h('div', { class: 'pj-items pj-items-ro', 'data-field': f.id }, h('div', { class: 'pj-label' }, f.name),
+        rows.length ? h('ul', { class: 'pj-ro-lines' }, rows.map((x) => h('li', {}, h('b', {}, `${x.qty ?? ''}${x.unit ? ' ' + x.unit : ''}`), ' ', x.desc || ''))) : h('p', { class: 'day-hint' }, 'No lines yet.'),
+        h('p', { class: 'day-hint' }, 'Prices are for owners and admins.'));
+    }
     const v = JSON.parse(JSON.stringify(r.values[f.id] || { rows: [], taxRate: 0 }));
     v.rows ||= [];
     const box = h('div', { class: 'pj-items' });
@@ -17656,6 +18025,7 @@
   // The record as saved, after any lines still being typed are saved.
   const prFresh = async (p, r) => { await PR.flush?.get(r.id)?.(); return recById(p.id, r.id) || r; };
   function quoteActions(p, t, r) {
+    if (!amAdmin()) return null; // sending a quote and its link are owners' and admins' (docs/jobflows/PRICES.md)
     const st = prField(t, t.fields.find((f) => f.key === 'status')?.id);
     const status = st && prText(p, st, r.values[st.id]);
     const send = async () => {
@@ -17900,7 +18270,7 @@
     let drawing = false;
     let inked = false;
     const at = (e) => { const b = pad.getBoundingClientRect(); return [((e.clientX - b.left) / b.width) * pad.width, ((e.clientY - b.top) / b.height) * pad.height]; };
-    pad.addEventListener('pointerdown', (e) => { drawing = true; inked = true; pad.setPointerCapture(e.pointerId); g.beginPath(); g.moveTo(...at(e)); });
+    pad.addEventListener('pointerdown', (e) => { drawing = true; inked = true; try { pad.setPointerCapture(e.pointerId); } catch {} g.beginPath(); g.moveTo(...at(e)); });
     pad.addEventListener('pointermove', (e) => { if (!drawing) return; g.lineTo(...at(e)); g.stroke(); });
     pad.addEventListener('pointerup', () => { drawing = false; });
     return { pad, inked: () => inked, data: () => pad.toDataURL('image/png'), clear: () => { g.clearRect(0, 0, pad.width, pad.height); inked = false; } };
@@ -17929,7 +18299,7 @@
     const sent = out ? h('div', { class: 'pj-so-out' }, signPending(r, f), h('span', {}, ` ${so.to?.name || ''}${so.to?.email ? ' · ' + so.to.email : ''}`),
       h('span', { style: 'flex:1' }),
       ['sent', 'viewed'].includes(so.status) ? [
-        h('button', { class: 'btn small', onclick: async () => { try { const y = await api('POST', `/signoff/${r.id}/${f.id}/remind`); toast(y.emailed === 'mailbox' ? 'Reminder sent from your email' : 'Reminder sent'); } catch (e) { toast(e.message); } } }, 'Remind'),
+        h('button', { class: 'btn small', onclick: async () => { try { const y = await sendOk('POST', `/signoff/${r.id}/${f.id}/remind`); if (!y || y.alreadySent) return; toast(y.emailed === 'mailbox' ? 'Reminder sent from your email' : 'Reminder sent'); } catch (e) { toast(e.message); } } }, 'Remind'),
         h('button', { class: 'btn small', onclick: async () => { try { const y = await api('GET', `/signoff/${r.id}/${f.id}/link`); await navigator.clipboard.writeText(y.link); toast('Link copied'); } catch (e) { toast(e.message); } } }, 'Copy link'),
         h('button', { class: 'btn small', onclick: async () => { try { const y = await api('POST', `/signoff/${r.id}/${f.id}/cancel`); prUpsertRecord(y.record); renderProjects(); } catch (e) { toast(e.message); } } }, 'Cancel')] : null) : null;
     const waiting = out && ['sent', 'viewed'].includes(so.status);
@@ -17984,7 +18354,8 @@
       h('label', {}, 'Who signs', name), h('label', {}, 'Their email', email), h('label', {}, 'Message', msg),
       h('button', { type: 'button', class: 'btn small', onclick: () => signPdfOpen(r, f) }, '📄 See what they’ll get'),
     ], async () => {
-      const y = await api('POST', `/signoff/${r.id}/${f.id}/send`, { name: name.value.trim(), email: email.value.trim(), message: msg.value.trim() });
+      const y = await sendOk('POST', `/signoff/${r.id}/${f.id}/send`, { name: name.value.trim(), email: email.value.trim(), message: msg.value.trim() });
+      if (!y || y.alreadySent) return;
       prUpsertRecord(y.record);
       renderProjects();
       if (y.emailed) toast(y.emailed === 'mailbox' ? 'Sent from your email' : `Sent to ${email.value.trim()}`);
@@ -18237,6 +18608,722 @@
     await loadVisits(r, true);
     renderProjects();
   }
+  // ----- Jobs and Job Flows (docs/jobflows/CONTRACTS.md): Workspace → Jobs. Every job on the team's job lists, the
+  // flows they run on (owners and admins build them), New job from a flow, and on a job's Overview the step it's at
+  // with a Next button that opens the sheet that does it. The server decides every step; this only shows it. -----
+  const JB = { tab: store.get('jbTab', 'jobs'), jobs: null, flows: null, items: null, q: '', flow: '', edit: null, loading: false, runs: new Map(), runBusy: new Set(), pick: {} };
+  const JB_KIND = { client: ['👤', 'Add client info'], details: ['📝', 'Add job info'], book: ['🗓', 'Book a visit'], remind: ['🔔', 'Visit reminder'], omw: ['🚗', 'On my way'], work: ['🧰', 'Do the work'], signoff: ['✍️', 'Customer signs off'], quote: ['📨', 'Send the quote'], invoice: ['🧾', 'Send the invoice'], payment: ['💵', 'Collect payment'], review: ['⭐', 'Review request'], tasks: ['☑️', 'Tasks'], campaign: ['🚀', 'Run a campaign'], gearOut: ['📤', 'Gear check-out'], gearIn: ['📥', 'Gear check-in'], custom: ['⭐', 'Your own step'] };
+  const JB_HOW = { remind: 'Kloomie emails (or texts) the customer at 9am the day before the next visit.', omw: 'Done when someone taps On my way on the job’s visit.', review: 'Kloomie asks the customer for a review, a while after the step before it is done.', client: 'Done when a client is on the job.', details: 'Done when the fields you pick are filled in.', book: 'Done when a visit is booked.', work: 'Done when the job’s checklist is ticked (and photos are on it, if you ask for them).', signoff: 'Done when the customer signs.', quote: 'Done when the customer accepts the quote. The accepted quote is the price.', invoice: 'Done when an invoice is sent.', payment: 'Done when the job’s invoices are paid in full.', tasks: 'Done when its tasks are done or skipped.', campaign: 'Starts a campaign from a saved one, linked to the job, when the job gets here. Done when that campaign is done.', gearOut: 'Done when the gear it lists has gone out to the job (checked out in Inventory).', gearIn: 'Done when everything checked out to the job is back.', custom: 'Done when someone taps Done, after its checklist.' };
+  const JB_NEXT = { omw: '🚗 On my way', client: 'Add the client', details: 'Fill in the job', book: 'Book the visit', work: 'Open the checklist', signoff: 'Get it signed', quote: 'Send the quote', invoice: 'Make the invoice', payment: 'Record the payment', tasks: 'See the tasks', campaign: '🚀 Open the campaign', gearOut: '📤 Check out gear', gearIn: '📥 Check gear in', custom: 'Done' };
+  const JB_MONEY = ['quote', 'invoice', 'payment'];
+  const JB_AUTO = ['remind', 'review'];
+  const JB_STATE = { done: 'done', skipped: 'skipped', current: 'next up', waiting: 'later' };
+  const jbIsJobList = (t) => !!t && (!!t.trade || t.key === 'jobs');
+  const jbLists = () => (S.projects || []).flatMap((p) => (p.types || []).filter(jbIsJobList).map((t) => ({ p, t })));
+  const jbStages = (t) => { const f = (t?.fields || []).find((x) => x.type === 'select' && ['status', 'stage'].includes(x.key)) || (t?.fields || []).find((x) => x.type === 'select'); return f ? f.choices.map((c) => c.label) : []; };
+  const jbStartable = () => (JB.flows || []).filter((f) => f.version && !f.archived && (amAdmin() || f.version.body.whoCreates === 'everyone'));
+  const jbListOf = (f) => { const l = (f.version?.body || f.draft)?.list; const p = l && projById(l.projectId); const t = p && prType(p, l.typeId); return { p, t }; };
+  const jbRender = () => { if (toolOpen === 'jobs') renderTool(); };
+  // A refresh asked for while one is loading runs again after it, so news that came in meanwhile isn't lost.
+  function jbLoad(force) {
+    if (JB.loading) { if (force) JB.again = true; return; }
+    if (!force && JB.jobs && JB.flows) return;
+    JB.loading = true;
+    Promise.all([api('GET', '/jobs'), api('GET', '/job-flows')]).then(([j, f]) => { JB.jobs = j.jobs; JB.flows = f.flows; }).catch((e) => toast(e.message)).finally(() => {
+      JB.loading = false;
+      if (JB.again) { JB.again = false; return jbLoad(true); }
+      jbRender();
+      if (PR.panel) renderProjects();
+    });
+  }
+  let jbSoonT = null;
+  const jbSoon = () => { clearTimeout(jbSoonT); jbSoonT = setTimeout(() => { if (toolOpen === 'jobs' && !JB.edit) jbLoad(true); else JB.jobs = null; }, 400); };
+  // A job's run, as the server shows it to you (null: not on a flow). Fetched when its window opens, and again when told.
+  function jbFetchRun(id) {
+    if (JB.runBusy.has(id)) return;
+    JB.runBusy.add(id);
+    api('GET', `/jobs/${id}/run`).then((y) => JB.runs.set(id, y.run || null)).catch(() => JB.runs.set(id, null)).finally(() => { JB.runBusy.delete(id); if (PR.panel === id) renderProjects(); });
+  }
+  const jbRunTimers = new Map();
+  function jbRunNews(msg) {
+    if (JB.runs.has(msg.recordId)) { clearTimeout(jbRunTimers.get(msg.recordId)); jbRunTimers.set(msg.recordId, setTimeout(() => { jbRunTimers.delete(msg.recordId); jbFetchRun(msg.recordId); }, 150)); }
+    jbSoon();
+  }
+  function jobsTool() {
+    if (!JB.jobs || !JB.flows) { jbLoad(); return [h('p', { class: 'day-hint' }, 'Loading…')]; }
+    const admin = amAdmin();
+    if (JB.edit && admin) return jbBuilder();
+    const tab = admin && ['quotes', 'invoices', 'items', 'flows'].includes(JB.tab) ? JB.tab : 'jobs';
+    const tabs = admin ? h('div', { class: 'seg jb-tabs', role: 'tablist' }, [['jobs', 'Jobs'], ['quotes', 'Quotes'], ['invoices', 'Invoices'], ['items', 'Items'], ['flows', 'Job Flows']].map(([k, l]) => h('button', { class: tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(tab === k), 'data-jb': k, onclick: () => { JB.tab = k; store.set('jbTab', k); renderTool(true); } }, l))) : null;
+    // Quotes and Invoices are Finance's lists, here too (PHASE2.md §5); Items is the business's price list.
+    const body = tab === 'flows' ? jbFlowsList() : tab === 'quotes' ? finQuotesTab() : tab === 'invoices' ? finInvoicesTab() : tab === 'items' ? jbItemsTab() : jbJobsList();
+    return [tabs, ...body].filter(Boolean);
+  }
+
+  // Jobs: every job, newest change first, with where its flow is and a button for the step it's at.
+  function jbJobsList() {
+    const can = jbStartable();
+    const q = h('input', { type: 'search', class: 'jb-q', placeholder: 'Find a job or a client', value: JB.q, 'aria-label': 'Find a job' });
+    const flowSel = h('select', { class: 'jb-flow-f', 'aria-label': 'Which flow' }, h('option', { value: '' }, 'Every flow'), ...JB.flows.map((f) => h('option', { value: f.id, selected: JB.flow === f.id }, `${f.icon || ''} ${f.name}`.trim())), h('option', { value: 'none', selected: JB.flow === 'none' }, 'Not on a flow'));
+    const box = h('div', { class: 'jb-rows' });
+    const draw = () => {
+      const s = JB.q.trim().toLowerCase();
+      const xs = JB.jobs.filter((j) => (!s || (j.name || '').toLowerCase().includes(s) || (j.client?.name || '').toLowerCase().includes(s)) && (!JB.flow || (JB.flow === 'none' ? !j.run : j.run?.flowId === JB.flow)));
+      box.replaceChildren(...(xs.length ? xs.slice(0, 300).map(jbRow) : [h('p', { class: 'day-hint' }, JB.jobs.length ? 'No job matches.' : can.length ? 'No jobs yet. Start one with + New job.' : amAdmin() ? 'No jobs yet. Build a flow in Job Flows, then start jobs from it.' : 'No jobs yet. Your owners and admins add the flows jobs start from.')]));
+    };
+    q.addEventListener('input', () => { JB.q = q.value; draw(); });
+    flowSel.addEventListener('change', () => { JB.flow = flowSel.value; draw(); });
+    draw();
+    return [h('div', { class: 'jb-bar' }, q, flowSel, can.length ? h('button', { class: 'btn primary-btn', 'data-act': 'new-job', onclick: () => jbNewJob() }, '+ New job') : null), box];
+  }
+  function jbRow(j) {
+    const r = j.run;
+    const sub = [j.client?.name, j.stage, j.scheduled ? dueLabel(String(j.scheduled).slice(0, 10)) : null, j.total ? money2(j.total) : null].filter(Boolean).join(' · ');
+    return h('div', { class: 'jb-row', 'data-job': j.id },
+      h('button', { type: 'button', class: 'jb-main', onclick: () => openJob(j.projectId, j.id) }, h('b', {}, j.name || 'Job'), sub ? h('small', {}, sub) : null,
+        r ? h('span', { class: 'jb-prog' }, h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((r.done / Math.max(1, r.total)) * 100)}%` })), h('small', {}, `${r.flowName} · ${r.done}/${r.total}`))
+          : h('small', { class: 'muted' }, j.legacy ? 'On campaign steps' : 'Not on a flow')),
+      // The step it's at: a button that does it for whoever may (as Next on the job), otherwise only its name.
+      r?.current && jbMayNext({ ...r.current, state: 'current' }) ? h('button', { type: 'button', class: 'btn small jb-next', 'data-next': j.id, title: 'Open the job at this step', onclick: () => jbGo(j.projectId, j.id) }, `${JB_KIND[r.current.kind]?.[0] || ''} ${r.current.name}`)
+        : r?.current ? h('small', { class: 'muted jb-at', 'data-at': j.id }, `Next: ${r.current.name}`)
+          : r?.status === 'done' ? h('span', { class: 'jb-done' }, '✓ Done') : null);
+  }
+  // Open a job and do the step it's at.
+  async function jbGo(projectId, id) {
+    await openJob(projectId, id);
+    const y = await api('GET', `/jobs/${id}/run`).catch(() => null);
+    JB.runs.set(id, y?.run || null);
+    const at = recEverywhere(id);
+    const s = y?.run?.steps?.find((x) => x.state === 'current');
+    if (at?.p && s && jbMayNext(s)) jbAction(at.p, prType(at.p, at.r.typeId), at.r, s);
+    else renderProjects();
+  }
+  // A job's window, on one of its tabs (as clicking the tab does).
+  function jbTabTo(r, k) {
+    delete PR.tabOf[r.id];
+    if (k !== 'overview') PR.tabOf[r.id] = k;
+    store.set('pjTabs', PR.tabOf);
+    renderProjects();
+  }
+  // Next: the sheet or the tab that does the step. Nothing here ticks a step off; the server does when it's done.
+  async function jbAction(p, t, r, s) {
+    switch (s.kind) {
+      case 'client': return jbTabTo(r, 'client');
+      case 'details': jbTabTo(r, 'overview'); return setTimeout(() => $('#projects .pj-fields')?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80);
+      case 'book': return visitSheet(p, t, r);
+      case 'work': case 'signoff': case 'tasks': return jbTabTo(r, 'work');
+      case 'quote': return jbQuote(p, r, s);
+      case 'omw': {
+        // The job's next visit of the kind the step is for (the server only counts On my way on that kind).
+        await loadVisits(r, true);
+        const today = todayKey(), kind = (s.visitKind || '').toLowerCase();
+        const fits = (PR.visits.get(r.id) || []).filter((x) => !x.done && (!kind || String(x.kind || '').toLowerCase() === kind));
+        const v = fits.find((x) => x.date >= today) || fits[0];
+        return v ? omwSheet(p, t, r, v) : toast(s.visitKind ? `Book the ${s.visitKind.toLowerCase()} visit first.` : 'Book a visit first.');
+      }
+      case 'invoice': return jbInvoice(r, s);
+      case 'payment': return jbPay(r);
+      case 'custom': return jbStep(r, s, 'done');
+      case 'gearOut': case 'gearIn': return jbGear(r, s);
+      case 'campaign': return s.campaign ? openCampaign(s.campaign.id) : toast('Its campaign starts when the job gets here.');
+    }
+  }
+  // Gear (PHASE4.md §5b): what the step needs and what's out on the job, checked out or back in through Inventory.
+  async function jbGear(r, s) {
+    let places = [];
+    try { places = (await api('GET', '/inventory')).places || []; } catch {}
+    const box = h('div', { class: 'jb-gear' });
+    const members = S.workspace?.members || [];
+    const draw = (g) => {
+      const rows = [];
+      for (const x of g.items || []) {
+        const left = x.need - x.got;
+        const unit = h('select', { 'aria-label': 'Which one', 'data-field': 'unit' }, x.free.map((u) => h('option', { value: u.id }, u.name)));
+        const who = h('select', { 'aria-label': 'Who’s taking it', 'data-field': 'who' }, members.map((m) => h('option', { value: m.id, selected: m.id === S.me?.memberId }, m.name)));
+        rows.push(h('div', { class: 'jb-gear-row', 'data-item': x.itemId },
+          h('b', {}, `${x.name}: ${x.got} of ${x.need} out`),
+          left <= 0 ? h('small', { class: 'muted' }, '✓ Enough out') : !x.free.length ? h('small', { class: 'jb-missing' }, `None available (${left} needed)`) :
+            h('div', { class: 'row2' }, unit, who, h('button', { class: 'btn small primary-btn', 'data-act': 'gear-out', onclick: () => act({ act: 'checkout', unitId: unit.value, memberId: who.value }) }, 'Check out'))));
+      }
+      if (s.kind === 'gearIn' || (g.out || []).length) {
+        rows.push(h('h4', {}, s.kind === 'gearIn' ? 'Out on this job' : 'Out on this job now'));
+        if (!(g.out || []).length) rows.push(h('small', { class: 'muted' }, 'Nothing is out on this job.'));
+        for (const u of g.out || []) {
+          const to = h('select', { 'aria-label': 'Where it goes back to', 'data-field': 'place' }, h('option', { value: '' }, 'Where it came from'), places.map((pl) => h('option', { value: pl.id }, pl.name)));
+          rows.push(h('div', { class: 'jb-gear-row', 'data-unit': u.unitId }, h('b', {}, `${u.name}`), h('small', { class: 'muted' }, `${u.item} · with ${members.find((m) => m.id === u.memberId)?.name || 'someone'}`),
+            s.kind === 'gearIn' ? h('div', { class: 'row2' }, to, h('button', { class: 'btn small primary-btn', 'data-act': 'gear-in', onclick: () => act({ act: 'return', unitId: u.unitId, ...(to.value ? { placeId: to.value } : {}) }) }, 'Check in')) : null));
+        }
+      }
+      for (const n of g.notes || []) rows.push(h('small', { class: 'jb-missing' }, n));
+      box.replaceChildren(...rows);
+    };
+    const act = async (body) => {
+      try {
+        const y = await api('POST', `/jobs/${r.id}/steps/${s.id}/gear`, body);
+        JB.runs.set(r.id, y.run);
+        draw(y.gear);
+        renderProjects();
+      } catch (e) {
+        toast(e.message);
+        const g = await api('GET', `/jobs/${r.id}/steps/${s.id}/gear`).catch(() => null);
+        if (g) draw(g);
+      }
+    };
+    const g = await api('GET', `/jobs/${r.id}/steps/${s.id}/gear`).catch((e) => { toast(e.message); return null; });
+    if (!g) return;
+    draw(g);
+    sheet(s.name, [h('p', { class: 'day-hint' }, s.kind === 'gearOut' ? 'Pick each one going out to this job (or scan its label in Inventory).' : 'Check each one back in. It goes back where it came from unless you pick a place.'), box], null);
+  }
+  // A job's files (PHASE4.md §1): its own stack, opened; an owner or admin makes it the first time.
+  async function jbFiles(r) {
+    if (r.stackId && stackById(r.stackId)) return showStack(r.stackId);
+    if (!amAdmin()) return toast('This job has no files stack yet. An owner or admin can add one.');
+    try { const y = await api('POST', `/jobs/${r.id}/stack`); r.stackId = y.stack.id; setTimeout(() => showStack(y.stack.id), 300); } catch (e) { toast(e.message); }
+  }
+  // Pin the job to a chat (PHASE4.md §4): whoever can see the job there sees its name and the step it's at.
+  function jbPinToChat(r) {
+    const chans = S.workspace?.channels || [];
+    const sel = h('select', { 'aria-label': 'Chat' }, h('option', { value: 'general' }, '# general'), chans.map((c) => h('option', { value: c.id }, '# ' + c.name)));
+    sheet('Pin to a chat', [h('label', {}, 'Chat', sel), h('small', { class: 'muted' }, 'People in the chat who can’t see this job get a locked chip.')], async () => {
+      const y = await api('POST', `/channels/${sel.value}/pins`, { kind: 'job', id: r.id });
+      toast(y.narrower ? 'Pinned. Not everyone in that chat can see this job.' : 'Pinned');
+    }, 'Pin it');
+  }
+  async function jbOpenById(id) {
+    let j = (JB.jobs || []).find((x) => x.id === id);
+    if (!j) { const y = await api('GET', '/jobs').catch(() => null); JB.jobs = y?.jobs || JB.jobs; j = (JB.jobs || []).find((x) => x.id === id); }
+    if (!j) return toast('That job is gone, or you can’t see it.');
+    openJob(j.projectId, j.id);
+  }
+  // Each message a step sends to the customer by itself: "Send by itself" or "Ask me first" (PHASE3B.md §2). Left
+  // unset it asks first, as every flow published before this does.
+  function jbSendPick(s) {
+    const what = { remind: 'The day-before reminder', review: 'The review request', quote: 'The quote’s follow-up', invoice: 'The invoice’s email', payment: 'Payment reminders' }[s.kind];
+    const sel = h('select', { 'data-field': 'send', 'aria-label': what }, [['ask', '✋ Ask me first'], ['auto', '🤖 Send by itself']].map(([k, l]) => h('option', { value: k, selected: (s.settings.send || 'ask') === k }, l)));
+    sel.addEventListener('change', () => { s.settings.send = sel.value; });
+    return h('label', { class: 'jb-send' }, what, sel);
+  }
+  // A message waiting for an OK (owners and admins): what it says, and Send / Don't send.
+  const JB_PEND = { remind: 'Day-before reminder', review: 'Review request', quoteFollow: 'Quote follow-up', invoice: 'Invoice email', payReminder: 'Payment reminder' };
+  function jbPending(r, s) {
+    const pd = s.pending;
+    const pv = pd.preview || {};
+    const via = pv.via === 'both' ? 'email and text' : pv.via === 'text' ? 'text' : 'email';
+    const act = async (action, btn) => {
+      btn.disabled = true;
+      try {
+        const y = await api('POST', `/jobs/${r.id}/steps/${s.id}/message`, { action, key: pd.key });
+        JB.runs.set(r.id, y.run || null);
+        toast(action === 'skip' ? 'Not sent.' : y.outcome === 'sent' ? `Sent to ${pv.to}` : y.outcome === 'blocked' ? `Not sent: ${y.reason || 'try again later'}` : y.outcome === 'unsure' ? 'It may not have gone.' : 'Done.');
+      } catch (e) {
+        if (e.data?.run) JB.runs.set(r.id, e.data.run);
+        toast(e.message);
+      }
+      renderProjects();
+    };
+    const send = h('button', { class: 'btn small primary-btn', 'data-act': 'msg-send', onclick: (e) => act('send', e.currentTarget) }, 'Send');
+    const skip = h('button', { class: 'btn small', 'data-act': 'msg-skip', onclick: (e) => act('skip', e.currentTarget) }, 'Don’t send');
+    return h('div', { class: 'jb-auto jb-pend', 'data-msg': 'pending' },
+      h('b', {}, `Ready to send: ${JB_PEND[pd.kind] || 'a message'}${pd.day ? ` (${plural(pd.day, 'day')} late)` : ''} to ${pv.to} by ${via}`),
+      pv.subject ? h('small', {}, pv.subject) : null,
+      h('div', { class: 'send-text' }, pv.text || ''),
+      pd.lastTry ? h('small', { class: 'jb-missing' }, `Didn’t go ${ago(pd.lastTry.at)}: ${pd.lastTry.reason}. Send again once that’s fixed.`) : null,
+      h('div', { class: 'btns' }, send, skip));
+  }
+  // The Quote step: send the job's lines as a quote (the link is copied), copy the link again, or start a new quote.
+  async function jbQuote(p, r, s) {
+    if (!amAdmin()) return toast('Owners and admins send the quotes.');
+    if (s.quote?.url && s.told && s.told.state !== 'blocked') { copyText(s.quote.url); return toast('Link copied.'); }
+    await prFresh(p, r);
+    // The link, and the customer emailed (or texted) once per link (PHASE3.md §3.3); the link is copied either way.
+    const y = await sendOk('POST', `/jobs/${r.id}/quote/send`).catch((e) => toast(e.message));
+    if (!y || y.alreadySent) return;
+    if (y.url) copyText(y.url);
+    const told = y.told;
+    toast(!told ? 'Link copied. Send it to your customer: they accept or decline it there.' : told.emailed || told.texted ? `Sent to the customer${told.emailed && told.texted ? ' by email and text' : told.texted ? ' by text' : ' by email'}. The link is copied too.` : `Link copied. Not emailed: ${told.reason || 'it couldn’t be sent'}.`);
+    JB.runs.set(r.id, y.run || null);
+    renderProjects();
+  }
+  async function jbRequote(r) {
+    const y = await api('POST', `/jobs/${r.id}/requote`).catch((e) => toast(e.message));
+    if (!y) return;
+    JB.runs.set(r.id, y.run || null);
+    toast('Ready for a new quote: change the lines if you need to, then send it.');
+    renderProjects();
+    jbSoon();
+  }
+  async function jbInvoice(r, s) {
+    if (!amAdmin()) return toast('Owners and admins make the invoices.');
+    await loadInvoices(r, true);
+    const draft = (PR.invoices.get(r.id) || []).find((x) => x.status === 'draft');
+    if (draft) return invoiceSheet(draft);
+    await PR.flush?.get(r.id)?.();
+    const inv = await api('POST', `/records/${r.id}/invoices`, { jobStep: s.id }).catch((e) => toast(e.message));
+    if (inv) { invoiceNews(inv); invoiceSheet(inv); }
+  }
+  async function jbPay(r) {
+    if (!amAdmin()) return toast('Owners and admins record payments.');
+    await loadInvoices(r, true);
+    const list = PR.invoices.get(r.id) || [];
+    const owed = list.find((x) => ['sent', 'viewed', 'partial'].includes(x.status));
+    if (owed) return paymentSheet(owed);
+    const draft = list.find((x) => x.status === 'draft');
+    if (draft) { toast('Send the invoice first.'); return invoiceSheet(draft); }
+    toast('There’s no invoice to pay yet.');
+  }
+  // Done, a checklist tick, skip, reopen: the server answers with the run as it's kept.
+  async function jbStep(r, s, what, body) {
+    const y = await api('POST', `/jobs/${r.id}/steps/${s.id}/${what}`, body).catch((e) => toast(e.message));
+    if (!y) return;
+    JB.runs.set(r.id, y.run || null);
+    if (what === 'done' && y.run?.status === 'done') toast('✓ Every step is done');
+    renderProjects();
+    jbSoon();
+  }
+  function jbSkip(r, s) {
+    const why = h('input', { placeholder: 'The customer brought the bins in themselves', maxlength: 300 });
+    sheet(`Skip “${s.name}”`, [h('label', {}, 'Why', why)], async () => {
+      if (!why.value.trim()) throw new Error('Say why it’s being skipped.');
+      const y = await api('POST', `/jobs/${r.id}/steps/${s.id}/skip`, { reason: why.value.trim() });
+      JB.runs.set(r.id, y.run || null);
+      renderProjects();
+      jbSoon();
+    }, 'Skip it');
+    setTimeout(() => why.focus(), 50);
+  }
+  function jbOffFlow(r, run) {
+    const why = h('input', { placeholder: 'Doing this one by hand', maxlength: 300 });
+    sheet(`Take it off “${run.flowName}”`, [h('p', { class: 'day-hint' }, 'The job stays as it is, with its stage, visits and invoices. Its steps stop.'), h('label', {}, 'Why', why)], async () => {
+      if (!why.value.trim()) throw new Error('Say why it’s coming off its flow.');
+      await api('POST', `/jobs/${r.id}/flow/cancel`, { reason: why.value.trim() });
+      JB.runs.set(r.id, null);
+      renderProjects();
+      jbSoon();
+    }, 'Take it off');
+  }
+  function jbPutOn(r, flows, replace) {
+    const sel = h('select', {}, flows.map((f) => h('option', { value: f.id }, `${f.icon || ''} ${f.name}`.trim())));
+    sheet(replace ? 'Move to another flow' : 'Put on a flow', [replace ? h('p', { class: 'day-hint' }, 'Its steps start over on the new flow. What’s already done on the job (a client, a visit, an invoice) counts straight away.') : null, h('label', {}, 'Flow', sel)].filter(Boolean), async () => {
+      const y = await api('POST', `/jobs/${r.id}/flow`, { flowId: sel.value, ...(replace ? { replace: true } : {}) });
+      JB.runs.set(r.id, y.run || null);
+      renderProjects();
+      jbSoon();
+    }, replace ? 'Move it' : 'Put it on');
+  }
+  // Next: only on the step the job is at, only for whoever the step is for, and invoices and payments only for owners
+  // and admins (their routes are theirs alone, whoever the step names).
+  // An automatic invoice step has a button only when it waits for a person ($0, its owner can't send, refused);
+  // held for an OK it waits for the approval alone (PHASE2.md §1.4).
+  const jbMayNext = (s) => s.state === 'current' && s.mayAct && !JB_AUTO.includes(s.kind) && (s.kind !== 'campaign' || !!s.campaign) && (!['quote', 'invoice', 'payment'].includes(s.kind) || amAdmin()) && (!s.auto || ['zero', 'owner', 'refused'].includes(s.waiting));
+  const JB_QUOTE = { draft: 'Not sent yet', sent: 'Sent, waiting for the customer', viewed: 'The customer opened it', accepted: 'Accepted', declined: 'Declined', changed: 'The lines changed after it was accepted', stale: 'Answered before this flow started' };
+  const JB_WAIT = { approval: 'Waiting for an OK: it sends when an approver says yes.', zero: 'Made, but the total is $0. Fix its lines and send it.', owner: 'Whoever started this job can’t send invoices any more. Make and send it by hand.', refused: 'It couldn’t be sent.' };
+  // On a job's Overview: its flow's steps in a row, the one picked (or next up) under it with its button.
+  function jbRunCard(p, t, r) {
+    if (!jbIsJobList(t)) return null;
+    if (!JB.runs.has(r.id)) { jbFetchRun(r.id); return null; }
+    const run = JB.runs.get(r.id);
+    if (!run) {
+      if (!amAdmin()) return null;
+      if (!JB.flows) { jbLoad(); return null; }
+      const fit = JB.flows.filter((f) => f.version && !f.archived && f.version.body.list.projectId === p.id && f.version.body.list.typeId === t.id);
+      return fit.length ? h('div', { class: 'jb-card jb-none' }, h('small', { class: 'muted' }, 'Not on a job flow.'), h('button', { class: 'btn small', 'data-act': 'put-on', onclick: () => jbPutOn(r, fit) }, 'Put on a flow'), h('button', { class: 'btn small', 'data-act': 'files', onclick: () => jbFiles(r) }, '📁 Files')) : null;
+    }
+    const cur = run.steps.find((x) => x.state === 'current');
+    const pickId = run.steps.some((x) => x.id === JB.pick[r.id]) ? JB.pick[r.id] : cur?.id || run.steps.at(-1)?.id;
+    const s = run.steps.find((x) => x.id === pickId);
+    const admin = amAdmin();
+    const steps = h('div', { class: 'jb-steps', role: 'list' }, run.steps.map((x, i) => h('button', { type: 'button', role: 'listitem', class: `jb-step s-${x.state}${x.id === pickId ? ' pick' : ''}`, 'data-step': x.id, 'data-state': x.state, title: `${x.name} · ${JB_STATE[x.state]}`, onclick: () => { JB.pick[r.id] = x.state === 'current' ? null : x.id; renderProjects(); } }, // the step it's at: follow the job again
+      h('span', { class: 'jb-dot' }, x.state === 'done' ? '✓' : x.state === 'skipped' ? '–' : String(i + 1)), h('span', { class: 'jb-sname' }, x.name))));
+    const whoText = (x) => x.who?.name ? `For ${x.who.name}` : x.who?.fallback || x.who?.type === 'admins' ? 'For owners and admins' : null;
+    const open = s && (s.state === 'current' || s.state === 'waiting');
+    const detail = s ? h('div', { class: 'jb-detail', 'data-detail': s.id },
+      h('div', { class: 'jb-dh' }, h('b', {}, `${JB_KIND[s.kind]?.[0] || ''} ${s.name}`), h('small', { class: 'muted' }, JB_STATE[s.state]), whoText(s) ? h('small', { class: 'muted' }, whoText(s)) : null),
+      s.kind === 'custom' && s.text ? h('p', { class: 'jb-text' }, s.text) : null,
+      s.state === 'skipped' ? h('small', { class: 'muted' }, `Skipped: ${s.skipReason || ''}`) : h('small', { class: 'muted' }, JB_HOW[s.kind]),
+      // What it's waiting for (a step Kloomie does says it in its own line below).
+      s.state === 'current' && run.current?.missing && !JB_AUTO.includes(s.kind) ? h('small', { class: 'jb-missing' }, run.current.missing) : null,
+      s.kind === 'quote' && s.quote ? h('div', { class: 'jb-quote', 'data-quote': s.quote.status },
+        h('small', {}, [JB_QUOTE[s.quote.status] || s.quote.status, s.quote.total != null ? money2(s.quote.total) : null, s.quote.answeredBy ? `by ${s.quote.answeredBy}` : null].filter(Boolean).join(' · ')),
+        s.quote.reason ? h('small', { class: 'muted' }, `“${s.quote.reason}”`) : null,
+        s.told ? h('small', { class: 'jb-told', 'data-told': s.told.state }, s.told.state === 'blocked' ? `Not emailed: ${s.told.reason}` : s.told.state === 'unsure' ? `The email may not have gone: ${s.told.reason || ''}` : s.told.state === 'sent' ? `Sent to the customer${s.told.via === 'text' ? ' by text' : s.told.via === 'both' ? ' by email and text' : ' by email'}` : 'Sending…') : null) : null,
+      s.pending && admin ? jbPending(r, s) : null,
+      JB_AUTO.includes(s.kind) && !(s.pending && admin) ? h('small', { class: 'jb-auto', 'data-waiting': s.state === 'current' && s.waiting ? 'yes' : '', 'data-msg': s.sent ? (s.sent.unsure ? 'unsure' : 'sent') : s.skippedBy === 'kloomie' ? 'skipped' : s.state },
+        s.skippedBy === 'kloomie' ? `Kloomie skipped it: ${s.skipReason || ''}` : s.sent?.unsure ? s.note || 'May not have gone.' : s.sent ? `Sent${s.sentTo ? (s.sentTo === 'both' ? ' by email and text' : s.sentTo === 'text' ? ' by text' : ' by email') : ''} ${ago(s.sent.at)}.` : s.state === 'current' ? s.waiting || 'Kloomie sends it by itself.' : 'Kloomie sends it by itself when the job gets here.') : null,
+      s.kind === 'quote' && s.followUp ? h('small', { class: 'muted', 'data-followup': s.followUp.sentAt ? 'sent' : '' }, s.followUp.sentAt ? `Follow-up sent ${ago(s.followUp.sentAt)}` : `Follows up after ${plural(s.followUp.days, 'day')} without an answer`) : null,
+      s.kind === 'payment' && s.reminders?.length ? h('small', { class: 'muted', 'data-reminders': s.reminders.filter((x) => x.sentAt).length }, 'Reminders: ' + s.reminders.map((x) => `${plural(x.days, 'day')} late${x.sentAt ? ' ✓' : x.passed ? ' (passed)' : ''}`).join(', ')) : null,
+      s.auto && !JB_AUTO.includes(s.kind) ? h('small', { class: 'jb-auto', 'data-waiting': s.waiting || '' }, s.waiting ? JB_WAIT[s.waiting] + (s.reason ? ' ' + s.reason : '') : s.state === 'done' ? `Made and sent by itself${s.invoice ? ' (' + s.invoice + ')' : ''}.` : 'Runs by itself when the step before it is done.') : null,
+      s.kind === 'custom' && s.checklist?.length ? h('div', { class: 'jb-check' }, s.checklist.map((c, i) => {
+        const box = h('input', { type: 'checkbox', checked: c.done, disabled: !s.mayAct || (c.done && s.state === 'done' && !admin) });
+        box.addEventListener('change', () => jbStep(r, s, 'check', { item: i, done: box.checked }));
+        return h('label', { class: 'pick' }, box, c.text);
+      })) : null,
+      s.gear && s.kind === 'gearOut' ? h('div', { class: 'jb-gearsum' }, s.gear.items.map((x) => h('small', { class: x.got >= x.need ? 'muted' : null }, `${x.got >= x.need ? '✓' : '○'} ${x.name}: ${x.got} of ${x.need} out`))) : null,
+      s.gear && s.kind === 'gearIn' ? h('div', { class: 'jb-gearsum' }, s.gear.out.length ? h('small', {}, 'Still out: ' + s.gear.out.map((u) => u.name).join(', ')) : h('small', { class: 'muted' }, 'Nothing out on the job.'), ...s.gear.notes.map((n) => h('small', { class: 'jb-missing' }, n))) : null,
+      s.campaign ? h('small', { class: 'jb-camp', 'data-campaign': s.campaign.status }, `🚀 ${s.campaign.name} · ${s.campaign.status === 'done' ? 'done' : 'going'}`) : null,
+      s.stock && (s.stock.used.length || s.stock.notes.length) ? h('div', { class: 'jb-stock' }, s.stock.used.length ? h('small', {}, 'Used from stock: ' + s.stock.used.map((u) => `${u.qty} × ${u.name}`).join(', ')) : null, ...s.stock.notes.map((n) => h('small', { class: 'jb-missing' }, n))) : null,
+      s.kind === 'tasks' && s.tasks ? h('div', { class: 'jb-tasks' }, s.tasks.map((x) => h('small', { class: x.done || x.skipped ? 'muted' : null }, `${x.done ? '✓' : x.skipped ? '–' : '○'} ${x.text}`)), s.more ? h('small', { class: 'muted' }, `and ${s.more} more`) : null) : null,
+      h('div', { class: 'jb-acts' },
+        jbMayNext(s) ? h('button', { class: 'btn small primary-btn', 'data-act': 'next', onclick: () => jbAction(p, t, r, s) }, s.kind === 'quote' && s.quote?.url ? '🔗 Copy the quote link' : JB_NEXT[s.kind]) : null,
+        s.kind === 'quote' && admin && s.quote?.mayRequote && ['declined', 'accepted', 'changed', 'viewed', 'sent', 'stale'].includes(s.quote.status) ? h('button', { class: 'btn small', 'data-act': 'requote', onclick: () => jbRequote(r) }, 'New quote') : null,
+        open && (admin || (s.canSkip && s.mayAct)) ? h('button', { class: 'btn small', 'data-act': 'skip', onclick: () => jbSkip(r, s) }, 'Skip') : null,
+        !open && admin ? h('button', { class: 'btn small', 'data-act': 'reopen', onclick: () => jbStep(r, s, 'reopen') }, 'Reopen') : null)) : null;
+    const menu = h('button', { class: 'icon-btn', html: I.more, 'aria-label': admin ? 'Flow options' : 'Job options', 'data-act': 'job-menu', onclick: (e) => {
+      const others = admin ? (JB.flows || []).filter((f) => f.id !== run.flowId && f.version && !f.archived && f.version.body.list.projectId === p.id && f.version.body.list.typeId === t.id) : [];
+      openMenu(e.currentTarget, [
+        { label: 'Pin to a chat…', run: () => jbPinToChat(r) },
+        others.length ? { label: 'Move to another flow…', run: () => jbPutOn(r, others, true) } : null,
+        admin && run.status === 'active' ? { label: 'Take it off this flow…', danger: true, run: () => jbOffFlow(r, run) } : null,
+      ].filter(Boolean));
+    } });
+    const files = r.stackId || admin ? h('button', { class: 'btn small', 'data-act': 'files', title: 'The job’s files: photos, plans, notes', onclick: () => jbFiles(r) }, '📁 Files') : null;
+    if (admin && !JB.flows) jbLoad();
+    return h('div', { class: 'jb-card', 'data-run': run.id },
+      h('div', { class: 'jb-ch' }, h('b', {}, `${run.icon || '🧰'} ${run.flowName}`), h('small', { class: 'muted' }, run.status === 'done' ? '✓ Every step done' : `${run.done} of ${run.total} done`),
+        h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((run.done / Math.max(1, run.total)) * 100)}%` })), files, menu),
+      run.gearLine ? h('small', { class: 'jb-gearline', 'data-gear': '1' }, '🧰 ' + run.gearLine) : null,
+      steps, detail);
+  }
+
+  // New job: which flow, what to call it, who it's for. The job and its run start together on the server.
+  function jbNewJob(flowId) {
+    const can = jbStartable();
+    if (!can.length) return toast('There’s no flow to start a job on yet.');
+    const key = 'nj-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const flowSel = h('select', { 'aria-label': 'Flow' }, can.map((f) => h('option', { value: f.id, selected: f.id === (flowId || store.get('jbLastFlow', '')) }, `${f.icon || ''} ${f.name}`.trim())));
+    const name = h('input', { placeholder: 'Dana Ruiz · 3 cans', maxlength: 200 });
+    const contacts = [...(S.contacts || [])].sort((a, b) => (a.name || a.company || '').localeCompare(b.name || b.company || ''));
+    const client = h('select', { 'aria-label': 'Client' }, h('option', { value: '' }, 'No client yet'), ...contacts.map((c) => h('option', { value: c.id }, c.name || c.company || c.email || 'Contact')));
+    const preview = h('ol', { class: 'jb-preview' });
+    const drawPreview = () => { const f = can.find((x) => x.id === flowSel.value); preview.replaceChildren(...(f?.version?.body?.steps || []).map((s) => h('li', {}, `${JB_KIND[s.kind]?.[0] || ''} ${s.name}`))); };
+    flowSel.addEventListener('change', drawPreview);
+    drawPreview();
+    sheet('New job', [h('label', {}, 'Flow', flowSel), h('label', {}, 'Job', name), contacts.length ? h('label', {}, 'Client', client) : null, h('small', { class: 'muted' }, 'Its steps:'), preview].filter(Boolean), async () => {
+      const f = can.find((x) => x.id === flowSel.value);
+      const { p, t } = jbListOf(f);
+      if (!p || !t) throw new Error('That flow’s job list isn’t open to you.');
+      if (!name.value.trim()) throw new Error('Give the job a name.');
+      const y = await api('POST', '/jobs', { flowId: f.id, values: { [t.primary]: name.value.trim() }, ...(client.value ? { contactId: client.value } : {}), key });
+      store.set('jbLastFlow', f.id);
+      JB.runs.set(y.job.id, y.run || null);
+      jbSoon();
+      await openJob(p.id, y.job.id);
+    }, 'Start the job');
+    setTimeout(() => name.focus(), 50);
+  }
+
+  // Job Flows (owners and admins): the flows, a new one (blank or from a ready-made start), and the builder.
+  // A draft that differs from the live version in anything a version keeps (billing, default items and due days too).
+  // Steps compare without what publishing copies in (a bundle's tasks, a saved campaign), which the draft gets too.
+  const jbStepsKey = (steps) => (steps || []).map((x) => ({ ...x, settings: x.settings && Object.fromEntries(Object.entries(x.settings).filter(([k]) => !['template', 'templateFrom', 'bundleFrom'].includes(k) && !(k === 'tasks' && x.settings.bundleId))) }));
+  const jbBodyKey = (b) => JSON.stringify({ l: b?.list, w: b?.whoCreates || 'admins', s: jbStepsKey(b?.steps), b: b?.billing || 'hand', i: b?.items || [], d: b?.dueDays ?? null, k: !!b?.stack });
+  const jbChanged = (f) => !!f.version && jbBodyKey(f.draft) !== jbBodyKey(f.version.body);
+  // Items: the business's price list (PHASE2.md §1.1): what a flow's default lines and quotes draw from.
+  function jbItemsLoad(force) {
+    if (JB.itemsBusy || (JB.items && !force)) return;
+    JB.itemsBusy = true;
+    api('GET', '/job-items').then((y) => { JB.items = y.items; }).catch((e) => toast(e.message)).finally(() => { JB.itemsBusy = false; jbRender(); });
+  }
+  // Saved bundles and Inventory's places and gear, for the builder (loaded once when a step needs them).
+  function jbPresetsLoad() {
+    if (JB.presets || JB.presetsBusy) return;
+    JB.presetsBusy = true;
+    api('GET', '/task-presets').then((y) => { JB.presets = y.presets || []; }).catch(() => { JB.presets = []; }).finally(() => { JB.presetsBusy = false; jbRender(); });
+  }
+  function jbInvLoad() {
+    if (JB.places || JB.invBusy) return;
+    JB.invBusy = true;
+    api('GET', '/inventory').then((y) => { JB.places = y.places || []; JB.invItems = y.items || []; }).catch(() => { JB.places = []; JB.invItems = []; }).finally(() => { JB.invBusy = false; jbRender(); });
+  }
+  const jbCents = (v) => { const n = Math.round(Number(String(v ?? '').replace(/[$,\s]/g, '')) * 100); return Number.isFinite(n) ? n : NaN; };
+  function jbItemSheet(x) {
+    const name = h('input', { value: x?.name || '', maxlength: 120, placeholder: 'Can clean', 'data-field': 'name' });
+    const desc = h('input', { value: x?.description || '', maxlength: 500, placeholder: 'Inside and out', 'data-field': 'description' });
+    const unit = h('input', { value: x?.unit || '', maxlength: 20, placeholder: 'each, hour, sq ft', 'data-field': 'unit' });
+    const price = h('input', { value: x ? (x.price / 100).toFixed(2) : '', inputmode: 'decimal', placeholder: '25.00', 'data-field': 'price' });
+    const cost = h('input', { value: x?.cost != null ? (x.cost / 100).toFixed(2) : '', inputmode: 'decimal', placeholder: 'Optional', 'data-field': 'cost' });
+    const tax = h('input', { type: 'checkbox', checked: x ? x.taxable !== false : true });
+    sheet(x ? x.name : 'New item', [h('label', {}, 'Name', name), h('label', {}, 'Description', desc), h('div', { class: 'row2' }, h('label', {}, 'Unit', unit), h('label', {}, 'Price ($)', price)), h('label', {}, 'Our cost ($)', cost), h('label', { class: 'pick' }, tax, 'Taxed')], async () => {
+      const body = { name: name.value.trim(), description: desc.value, unit: unit.value.trim(), price: jbCents(price.value || 0), cost: cost.value.trim() ? jbCents(cost.value) : null, taxable: tax.checked };
+      const y = x ? await api('PATCH', '/job-items/' + x.id, body) : await api('POST', '/job-items', body);
+      JB.items = [...(JB.items || []).filter((z) => z.id !== y.item.id), y.item].sort((a, b) => a.name.localeCompare(b.name));
+      jbRender();
+      toast(x ? 'Saved' : 'Item added');
+    }, x ? 'Save' : 'Add it');
+    setTimeout(() => name.focus(), 50);
+  }
+  function jbImport() {
+    const boards = (S.projects || []).filter((p) => (p.types || []).some((t) => t.key === 'price_list'));
+    if (!boards.length) return toast('None of your boards has a price list.');
+    const sel = h('select', { 'aria-label': 'Board' }, boards.map((p) => h('option', { value: p.id }, p.name)));
+    sheet('Copy from a board’s price list', [h('p', { class: 'day-hint' }, 'A one-time copy into Items. Items already copied are skipped; the board keeps its list.'), h('label', {}, 'Board', sel)], async () => {
+      const y = await api('POST', '/job-items/import', { projectId: sel.value });
+      toast(`${plural(y.added, 'item')} copied${y.skipped ? `, ${y.skipped} already here` : ''}${y.noName ? `, ${y.noName} without a name skipped` : ''}`);
+      jbItemsLoad(true);
+    }, 'Copy them');
+  }
+  function jbItemsTab() {
+    jbItemsLoad();
+    if (!JB.items) return [h('p', { class: 'day-hint' }, 'Loading…')];
+    const live = JB.items.filter((x) => !x.archived), gone = JB.items.filter((x) => x.archived);
+    const row = (x) => h('div', { class: 'jb-row' + (x.archived ? ' off' : ''), 'data-item': x.id },
+      h('button', { type: 'button', class: 'jb-main', onclick: () => jbItemSheet(x) }, h('b', {}, x.name), h('small', {}, [money2(x.price) + (x.unit ? ' / ' + x.unit : ''), x.cost != null ? `cost ${money2(x.cost)}` : null, x.taxable === false ? 'not taxed' : null, x.description].filter(Boolean).join(' · '))),
+      h('button', { class: 'btn small', 'data-act': x.archived ? 'restore' : 'archive', onclick: async () => { const y = await api('POST', `/job-items/${x.id}/${x.archived ? 'restore' : 'archive'}`).catch((e) => toast(e.message)); if (y) { Object.assign(x, y.item); jbRender(); } } }, x.archived ? 'Bring back' : 'Archive'));
+    return [
+      h('p', { class: 'day-hint' }, 'Your price list: services, materials and fees. Flows fill a new job’s lines from it, and quotes and invoices are made from those lines. Only owners and admins see it.'),
+      h('div', { class: 'jb-bar' }, h('button', { class: 'btn primary-btn', 'data-act': 'new-item', onclick: () => jbItemSheet(null) }, '+ New item'), h('button', { class: 'btn', 'data-act': 'import-items', onclick: jbImport }, 'Copy from a board’s price list')),
+      h('div', { class: 'jb-rows' }, live.length ? live.map(row) : [h('p', { class: 'day-hint' }, 'No items yet.')]),
+      gone.length ? h('details', { class: 'jb-gone' }, h('summary', {}, `Archived (${gone.length})`), h('div', { class: 'jb-rows' }, gone.map(row))) : null,
+    ].filter(Boolean);
+  }
+  function jbFlowsList() {
+    const rows = JB.flows.map((f) => {
+      const { p, t } = jbListOf(f);
+      const sub = [f.version ? `Version ${f.version.n} · ${plural(f.version.body.steps.length, 'step')}` : 'Not published yet', jbChanged(f) ? 'changes not published' : null, t ? `${p.name} · ${t.name}` : null, f.archived ? 'Archived' : null].filter(Boolean).join(' · ');
+      return h('div', { class: 'jb-row' + (f.archived ? ' off' : ''), 'data-flow': f.id },
+        h('button', { type: 'button', class: 'jb-main', onclick: () => jbEdit(f) }, h('b', {}, `${f.icon || '🧰'} ${f.name}`), h('small', {}, sub)),
+        h('button', { class: 'icon-btn', html: I.more, 'aria-label': 'Flow options', onclick: (e) => openMenu(e.currentTarget, [
+          { label: 'Edit…', run: () => jbEdit(f) },
+          f.version && !f.archived ? { label: 'Start a job on it…', run: () => jbNewJob(f.id) } : null,
+          { label: 'Make a copy', run: async () => { const y = await api('POST', `/job-flows/${f.id}/copy`).catch((er) => toast(er.message)); if (y) { JB.flows.push(y); jbEdit(y); } } },
+          { label: f.archived ? 'Bring it back' : 'Archive (no new jobs; running ones go on)', run: () => api('POST', `/job-flows/${f.id}/archive`, { archived: !f.archived }).then((y) => { Object.assign(f, y); renderTool(true); }).catch((er) => toast(er.message)) },
+        ].filter(Boolean)) }));
+    });
+    return [
+      h('p', { class: 'day-hint' }, 'A job flow is the steps one kind of job goes through, in order: add the client, book it, do the work, get paid. A job started on a flow shows the step it’s at with a button to do it, and ticks each step off by itself when it’s done.'),
+      h('div', { class: 'jb-bar' }, h('button', { class: 'btn primary-btn', 'data-act': 'new-flow', onclick: () => jbNewFlow() }, '+ New flow')),
+      h('div', { class: 'jb-rows' }, rows.length ? rows : [h('p', { class: 'day-hint' }, 'No flows yet.')]),
+    ];
+  }
+  // Ready-made starts: the steps, and the stage each reaches when the job list has it.
+  const JB_STARTS = {
+    blank: { label: 'Blank (one step to start)', steps: [['custom', 'First step', null, { text: '' }]] },
+    service: { label: 'Service call', steps: [['client'], ['details', null, null, { fields: ['address'] }], ['book', null, 'Scheduled'], ['work', null, 'Done'], ['signoff'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+    install: { label: 'Measure, then install', steps: [['client'], ['book', 'Book the measure', null, { visitKind: 'Measure' }], ['details', null, null, { fields: ['address'] }], ['book', 'Book the install', 'Scheduled', { visitKind: 'Install' }], ['work', null, 'Done'], ['signoff'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+    cleaning: { label: 'Cleaning visit', steps: [['client'], ['details', null, null, { fields: ['address'] }], ['book', null, 'Scheduled'], ['work', 'Clean', 'Done'], ['invoice', null, 'Invoiced'], ['payment', null, 'Paid']] },
+  };
+  function jbStartSteps(key, t) {
+    const stages = jbStages(t).map((x) => x.toLowerCase());
+    const keys = new Set((t?.fields || []).map((f) => f.key));
+    return JB_STARTS[key].steps.map(([kind, name, stage, settings]) => ({ kind, name: name || JB_KIND[kind][1], stage: stage && stages.includes(stage.toLowerCase()) ? jbStages(t)[stages.indexOf(stage.toLowerCase())] : null, who: { type: JB_MONEY.includes(kind) ? 'admins' : 'anyone' }, canSkip: false,
+      settings: kind === 'details' ? { fields: (settings?.fields || []).filter((k) => keys.has(k)) } : settings || {} }));
+  }
+  function jbNewFlow() {
+    const lists = jbLists();
+    if (!lists.length) return toast('Make a job board first (Workspace → Boards → a trade’s jobs).');
+    const name = h('input', { placeholder: 'Trash can cleaning, individual', maxlength: 80 });
+    const list = h('select', { 'aria-label': 'Job list' }, lists.map(({ p, t }, i) => h('option', { value: i }, `${p.name} · ${t.name}`)));
+    const start = h('select', { 'aria-label': 'Start from' }, Object.entries(JB_STARTS).map(([k, x]) => h('option', { value: k, selected: k === 'service' }, x.label)));
+    sheet('New job flow', [h('label', {}, 'Name', name), h('label', {}, 'For the jobs on', list), h('label', {}, 'Start from', start), h('small', { class: 'muted' }, 'You can change every step before you publish it.')], async () => {
+      if (!name.value.trim()) throw new Error('Give the flow a name.');
+      const { p, t } = lists[Number(list.value)];
+      const y = await api('POST', '/job-flows', { name: name.value.trim(), list: { projectId: p.id, typeId: t.id }, steps: jbStartSteps(start.value, t) });
+      JB.flows.push(y);
+      jbEdit(y);
+    }, 'Make it');
+    setTimeout(() => name.focus(), 50);
+  }
+  function jbEdit(f) {
+    const d = f.draft || f.version?.body;
+    JB.edit = { id: f.id, name: f.name, icon: f.icon || '🧰', list: { ...d.list }, whoCreates: d.whoCreates || 'admins', stack: !!d.stack, billing: d.billing || 'hand', items: JSON.parse(JSON.stringify(d.items || [])), dueDays: d.dueDays ?? null, steps: JSON.parse(JSON.stringify(d.steps || [])), err: '' };
+    JB.tab = 'flows';
+    // What step settings pick from (saved bundles; Inventory's places and gear), loaded fresh as the builder opens.
+    JB.presets = null; JB.places = null; JB.invItems = null;
+    jbPresetsLoad();
+    if (toolOn('inventory')) jbInvLoad();
+    if (toolOpen !== 'jobs') openTool('jobs'); else renderTool(true);
+  }
+  // The builder: name, list, who starts jobs, and the steps (add, rename, reorder, remove, who, stage, settings).
+  function jbBuilder() {
+    const E = JB.edit;
+    const f = JB.flows.find((x) => x.id === E.id);
+    const lists = jbLists();
+    const at = lists.find(({ p, t }) => p.id === E.list.projectId && t.id === E.list.typeId);
+    const t = at?.t;
+    const stages = jbStages(t);
+    const redraw = () => renderTool(true);
+    const name = h('input', { class: 'jb-name', value: E.name, maxlength: 80, 'aria-label': 'Flow name' });
+    name.addEventListener('input', () => { E.name = name.value; });
+    const icon = h('input', { class: 'jb-icon', value: E.icon, maxlength: 8, 'aria-label': 'Icon' });
+    icon.addEventListener('input', () => { E.icon = icon.value; });
+    const list = h('select', { 'aria-label': 'Job list' }, lists.map(({ p, t: x }, i) => h('option', { value: i, selected: p.id === E.list.projectId && x.id === E.list.typeId }, `${p.name} · ${x.name}`)));
+    list.addEventListener('change', () => {
+      const n = lists[Number(list.value)];
+      E.list = { projectId: n.p.id, typeId: n.t.id };
+      const ok = jbStages(n.t), keys = new Set(n.t.fields.map((x) => x.key));
+      for (const s of E.steps) { if (s.stage && !ok.includes(s.stage)) s.stage = null; if (s.kind === 'details') s.settings = { fields: (s.settings?.fields || []).filter((k) => keys.has(k)) }; }
+      redraw();
+    });
+    const who = h('select', { 'aria-label': 'Who starts jobs' }, h('option', { value: 'admins', selected: E.whoCreates !== 'everyone' }, 'Owners and admins'), h('option', { value: 'everyone', selected: E.whoCreates === 'everyone' }, 'Everyone on the team'));
+    who.addEventListener('change', () => { E.whoCreates = who.value; });
+    const roles = S.workspace?.roles || [], members = S.workspace?.members || [];
+    const move = (i, by) => { const j = i + by; if (j < 0 || j >= E.steps.length) return; [E.steps[i], E.steps[j]] = [E.steps[j], E.steps[i]]; redraw(); };
+    const stepCard = (s, i) => {
+      const nm = h('input', { value: s.name || '', maxlength: 80, 'aria-label': 'Step name', 'data-field': 'name' });
+      nm.addEventListener('input', () => { s.name = nm.value; });
+      const st = h('select', { 'aria-label': 'Stage it moves the job to', 'data-field': 'stage' }, h('option', { value: '' }, 'No stage change'), ...stages.map((l) => h('option', { value: l, selected: s.stage === l }, `Moves the job to ${l}`)));
+      st.addEventListener('change', () => { s.stage = st.value || null; });
+      const wv = s.who?.type === 'role' || s.who?.type === 'member' ? `${s.who.type}:${s.who.id}` : s.who?.type || 'anyone';
+      const wsel = h('select', { 'aria-label': 'Who does it', 'data-field': 'who' }, h('option', { value: 'anyone', selected: wv === 'anyone' }, 'Anyone on the job'), h('option', { value: 'admins', selected: wv === 'admins' }, 'Owners and admins'),
+        ...roles.map((r) => h('option', { value: 'role:' + r.id, selected: wv === 'role:' + r.id }, `The ${r.name} role`)), ...members.map((m) => h('option', { value: 'member:' + m.id, selected: wv === 'member:' + m.id }, m.name)));
+      wsel.addEventListener('change', () => { const [type, id] = wsel.value.split(':'); s.who = id ? { type, id } : { type }; });
+      // Money steps are for owners and admins, whatever else (PHASE2.md §1.2).
+      if (JB_MONEY.includes(s.kind) || JB_AUTO.includes(s.kind) || s.kind === 'campaign') s.who = { type: 'admins' };
+      const whoEl = JB_AUTO.includes(s.kind) ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, '🤖 Done by Kloomie') : JB_MONEY.includes(s.kind) || s.kind === 'campaign' ? h('small', { class: 'muted jb-who-fixed', 'data-field': 'who' }, 'For owners and admins') : wsel;
+      const skip = h('input', { type: 'checkbox', checked: !!s.canSkip });
+      skip.addEventListener('change', () => { s.canSkip = skip.checked; });
+      s.settings ||= {};
+      let extra = null;
+      if (s.kind === 'details') {
+        const keys = new Set(s.settings.fields || []);
+        extra = h('div', { class: 'jb-fields' }, h('small', { class: 'muted' }, 'Done when these are filled in (none: a Done button):'), ...(t?.fields || []).filter((x) => x.id !== t.primary && !['autonumber', 'contact', 'items', 'files', 'signature', 'checklist'].includes(x.type)).map((x) => {
+          const b = h('input', { type: 'checkbox', checked: keys.has(x.key) });
+          b.addEventListener('change', () => { const ks = new Set(s.settings.fields || []); b.checked ? ks.add(x.key) : ks.delete(x.key); s.settings.fields = [...ks]; });
+          return h('label', { class: 'pick' }, b, x.name);
+        }));
+      } else if (s.kind === 'book') {
+        const k = h('select', { 'aria-label': 'Kind of visit' }, h('option', { value: '' }, 'Any visit'), ...VISIT_KINDS.map((x) => h('option', { value: x, selected: s.settings.visitKind === x }, x)));
+        k.addEventListener('change', () => { s.settings = k.value ? { visitKind: k.value } : {}; });
+        extra = h('label', {}, 'Kind of visit', k);
+      } else if (s.kind === 'remind' || s.kind === 'omw') {
+        const k = h('select', { 'aria-label': 'Kind of visit', 'data-field': 'visitKind' }, h('option', { value: '' }, 'The next visit, any kind'), ...VISIT_KINDS.map((x) => h('option', { value: x, selected: s.settings.visitKind === x }, x)));
+        k.addEventListener('change', () => { s.settings = k.value ? { visitKind: k.value } : {}; });
+        extra = h('label', {}, 'For which visit', k);
+      } else if (s.kind === 'review') {
+        const d = h('input', { type: 'number', min: 0, max: 168, step: 1, value: s.settings.delayHours ?? 1, 'data-field': 'delayHours' });
+        d.addEventListener('input', () => { s.settings.delayHours = d.value === '' ? undefined : Number(d.value); });
+        const u = h('input', { type: 'url', value: s.settings.url || '', placeholder: 'https://g.page/r/… (blank: the team’s review link)', 'data-field': 'url' });
+        u.addEventListener('input', () => { if (u.value.trim()) s.settings.url = u.value.trim(); else delete s.settings.url; });
+        extra = h('div', { class: 'row2' }, h('label', {}, 'Hours after the step before', d), h('label', {}, 'Review link', u));
+      } else if (s.kind === 'quote') {
+        const em = h('input', { type: 'checkbox', checked: s.settings.email !== false, 'data-field': 'email' });
+        em.addEventListener('change', () => { s.settings.email = em.checked; });
+        const fu = h('input', { type: 'number', min: 0, max: 30, step: 1, value: s.settings.followUpDays || 0, 'data-field': 'followUpDays' });
+        fu.addEventListener('input', () => { s.settings.followUpDays = Number(fu.value) || 0; });
+        extra = h('div', {}, h('label', { class: 'pick' }, em, 'Email the quote to the customer when it’s sent'), h('label', {}, 'Follow up after (days without an answer; 0 = never)', fu));
+      } else if (s.kind === 'invoice' && E.billing === 'auto') {
+        const em = h('input', { type: 'checkbox', checked: s.settings.email !== false, 'data-field': 'email' });
+        em.addEventListener('change', () => { s.settings.email = em.checked; });
+        extra = h('label', { class: 'pick' }, em, 'Email it to the customer, with the pay link');
+      } else if (s.kind === 'payment') {
+        const rm = h('input', { value: (s.settings.reminders || []).join(', '), placeholder: 'e.g. 3, 7, 14 (blank: none)', 'data-field': 'reminders' });
+        rm.addEventListener('input', () => { s.settings.reminders = rm.value.split(/[,\s]+/).filter(Boolean).map(Number); });
+        extra = h('label', {}, 'Reminders, days after it’s due (up to 3)', rm);
+      } else if (s.kind === 'work') {
+        const b = h('input', { type: 'checkbox', checked: !!s.settings.photos });
+        b.addEventListener('change', () => { s.settings.photos = b.checked || undefined; });
+        // Stock off Inventory when the work is done (PHASE4.md §5).
+        const inv = toolOn('inventory');
+        const use = h('input', { type: 'checkbox', checked: !!s.settings.useStock, 'data-field': 'useStock' });
+        const pl = h('select', { 'aria-label': 'From which place', 'data-field': 'fromPlace' }, h('option', { value: '' }, 'Pick a place…'), (JB.places || []).map((x) => h('option', { value: x.id, selected: s.settings.fromPlace === x.id }, x.name)));
+        use.addEventListener('change', () => { if (use.checked) { s.settings.useStock = true; s.settings.fromPlace = pl.value; } else { delete s.settings.useStock; delete s.settings.fromPlace; } redraw(); });
+        pl.addEventListener('change', () => { s.settings.fromPlace = pl.value; });
+        if (inv) jbInvLoad();
+        extra = h('div', {}, h('label', { class: 'pick' }, b, 'Needs photos on the job too'),
+          inv ? h('label', { class: 'pick' }, use, 'Use the job’s stock from Inventory when it’s done') : null,
+          inv && s.settings.useStock ? h('label', {}, 'From', pl) : null);
+      } else if (s.kind === 'tasks') {
+        const ta = h('textarea', { rows: 3, placeholder: 'One task a line', 'data-field': 'tasks' }, (s.settings.tasks || []).join('\n'));
+        ta.addEventListener('input', () => { s.settings.tasks = ta.value.split('\n').map((x) => x.trim()).filter(Boolean); });
+        // Or a saved bundle, copied in when the flow is published (PHASE4.md §3).
+        jbPresetsLoad();
+        const bundles = (JB.presets || []).filter((x) => x.kind === 'bundle');
+        const bsel = h('select', { 'aria-label': 'Saved bundle', 'data-field': 'bundle' }, h('option', { value: '' }, 'Write the tasks here'), bundles.map((x) => h('option', { value: x.id, selected: s.settings.bundleId === x.id }, `From the bundle “${x.name}”`)));
+        bsel.addEventListener('change', () => { if (bsel.value) s.settings.bundleId = bsel.value; else delete s.settings.bundleId; redraw(); });
+        extra = h('div', {}, bundles.length || s.settings.bundleId ? h('label', {}, 'Its tasks', bsel) : null,
+          s.settings.bundleId ? h('small', { class: 'muted' }, 'The bundle’s tasks are copied in when you publish. Change the bundle later and publish again to pick it up.') : h('label', {}, 'Its tasks (made when a job starts)', ta));
+      } else if (s.kind === 'campaign') {
+        const tpls = S.templates || [];
+        const tsel = h('select', { 'aria-label': 'Saved campaign', 'data-field': 'template' }, h('option', { value: '' }, tpls.length ? 'Pick a saved campaign…' : 'No saved campaigns yet (save one from a campaign’s menu)'), tpls.map((x) => h('option', { value: x.id, selected: s.settings.templateId === x.id }, x.name)));
+        tsel.addEventListener('change', () => { if (tsel.value) s.settings.templateId = tsel.value; else delete s.settings.templateId; });
+        extra = h('div', {}, h('label', {}, 'Starts this saved campaign', tsel), h('small', { class: 'muted' }, 'Copied in when you publish; the campaign is linked to the job and doesn’t move its stage.'));
+      } else if (s.kind === 'gearOut') {
+        jbInvLoad();
+        s.settings.items ||= [];
+        const gear = (JB.invItems || []).filter((x) => x.track === 'units' && !x.archived);
+        const rows = s.settings.items.map((x, k) => {
+          const q = h('input', { type: 'number', min: 1, max: 20, step: 1, value: x.qty, class: 'jb-qty', 'aria-label': 'How many' });
+          q.addEventListener('input', () => { x.qty = Number(q.value); });
+          return h('div', { class: 'jb-defrow', 'data-gear-item': x.itemId }, q, h('span', {}, gear.find((y) => y.id === x.itemId)?.name || 'Gear that was deleted'), h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove', onclick: () => { s.settings.items.splice(k, 1); redraw(); } }));
+        });
+        const add = gear.filter((y) => !s.settings.items.some((x) => x.itemId === y.id));
+        const pick = h('select', { 'aria-label': 'Add gear', 'data-field': 'add-gear' }, h('option', { value: '' }, add.length ? '+ Add gear…' : gear.length ? 'All your gear is in' : 'No gear tracked one by one in Inventory yet'), add.map((y) => h('option', { value: y.id }, y.name)));
+        pick.addEventListener('change', () => { if (pick.value) { s.settings.items.push({ itemId: pick.value, qty: 1 }); redraw(); } });
+        extra = h('div', {}, h('small', { class: 'muted' }, 'The gear going out to the job:'), ...rows, pick);
+      } else if (s.kind === 'custom') {
+        const tx = h('textarea', { rows: 2, placeholder: 'What to do', 'data-field': 'text' }, s.settings.text || '');
+        tx.addEventListener('input', () => { s.settings.text = tx.value; });
+        const cl = h('textarea', { rows: 2, placeholder: 'A checklist, one item a line (optional)', 'data-field': 'checklist' }, (s.settings.checklist || []).join('\n'));
+        cl.addEventListener('input', () => { s.settings.checklist = cl.value.split('\n').map((x) => x.trim()).filter(Boolean); });
+        extra = h('div', {}, h('label', {}, 'What to do', tx), h('label', {}, 'Checklist', cl));
+      }
+      return h('div', { class: 'jb-scard', 'data-i': i, 'data-kind': s.kind },
+        h('div', { class: 'jb-sh' }, h('span', { class: 'jb-dot' }, String(i + 1)), h('span', { class: 'jb-kind' }, `${JB_KIND[s.kind]?.[0]} ${JB_KIND[s.kind]?.[1]}`), h('span', { style: 'flex:1' }),
+          h('button', { class: 'icon-btn', 'aria-label': 'Move up', disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
+          h('button', { class: 'icon-btn', 'aria-label': 'Move down', disabled: i === E.steps.length - 1, onclick: () => move(i, 1) }, '↓'),
+          h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove step', onclick: () => { E.steps.splice(i, 1); redraw(); } })),
+        h('small', { class: 'muted' }, JB_HOW[s.kind]),
+        nm, h('div', { class: 'row2' }, whoEl, st), extra,
+        s.kind === 'invoice' && E.billing === 'auto' ? h('small', { class: 'jb-auto' }, 'Automatic: made from the job’s lines when the step before it is done, and its link is ready. Whether its email goes by itself or asks you first is set below.') : null,
+        ['remind', 'review', 'quote', 'payment'].includes(s.kind) || (s.kind === 'invoice' && E.billing === 'auto') ? jbSendPick(s) : null,
+        h('label', { class: 'pick' }, skip, 'Whoever does it may skip it (with a reason)'));
+    };
+    const add = h('button', { class: 'btn', 'data-act': 'add-step', onclick: (e) => openMenu(e.currentTarget, Object.entries(JB_KIND).filter(([k]) => (k !== 'quote' || (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote'))) && (!['gearOut', 'gearIn'].includes(k) || toolOn('inventory'))).map(([k, [ic, l]]) => ({ label: `${ic} ${l}`, run: () => { E.steps.push({ kind: k, name: l, stage: null, who: { type: JB_MONEY.includes(k) || JB_AUTO.includes(k) || k === 'campaign' ? 'admins' : 'anyone' }, canSkip: false, settings: k === 'tasks' ? { tasks: [] } : k === 'review' ? { delayHours: 1 } : k === 'gearOut' ? { items: [] } : {} }); redraw(); } }))) }, '+ Add a step');
+    const stackBox = h('input', { type: 'checkbox', checked: !!E.stack, 'data-field': 'stack' });
+    stackBox.addEventListener('change', () => { E.stack = stackBox.checked; });
+    // Billing: by hand, quote first (puts a Send the quote step before the invoice), or automatic.
+    const bill = h('select', { 'aria-label': 'Billing', 'data-field': 'billing' }, [['hand', 'By hand: an owner or admin sends the invoice'], ['quote', 'Quote first: the customer accepts a quote, then the invoice'], ['auto', 'Automatic: the invoice sends itself after the work']].map(([k, l]) => h('option', { value: k, selected: E.billing === k }, l)));
+    bill.addEventListener('change', () => {
+      E.billing = bill.value;
+      if (E.billing !== 'quote') E.steps = E.steps.filter((x) => x.kind !== 'quote');
+      if (E.billing === 'quote' && !E.steps.some((x) => x.kind === 'quote')) {
+        const at = E.steps.findIndex((x) => x.kind === 'invoice');
+        const q = { kind: 'quote', name: JB_KIND.quote[1], stage: null, who: { type: 'admins' }, canSkip: false, settings: {} };
+        if (at >= 0) E.steps.splice(at, 0, q);
+        else E.steps.push(q, { kind: 'invoice', name: JB_KIND.invoice[1], stage: null, who: { type: 'admins' }, canSkip: false, settings: {} });
+      }
+      if (E.billing === 'auto' && !E.steps.some((x) => x.kind === 'invoice')) E.steps.push({ kind: 'invoice', name: JB_KIND.invoice[1], stage: null, who: { type: 'admins' }, canSkip: false, settings: {} });
+      redraw();
+    });
+    const due = h('input', { type: 'number', min: 0, max: 120, step: 1, value: E.dueDays ?? '', placeholder: '14', 'aria-label': 'Invoices due in days', 'data-field': 'dueDays' });
+    due.addEventListener('input', () => { E.dueDays = due.value === '' ? null : Number(due.value); });
+    // Default items: what a new job's lines start with (from Items).
+    jbItemsLoad();
+    const live = (JB.items || []).filter((x) => !x.archived);
+    const itemRows = h('div', { class: 'jb-defaults' }, E.items.map((x, i) => {
+      const it = (JB.items || []).find((y) => y.id === x.itemId);
+      const qty = h('input', { type: 'number', min: 0, step: 'any', value: x.qty, 'aria-label': 'Quantity', class: 'jb-qty' });
+      qty.addEventListener('input', () => { x.qty = Number(qty.value); });
+      return h('div', { class: 'jb-defrow', 'data-default': x.itemId }, qty, h('span', {}, it ? `${it.name} · ${money2(it.price)}${it.archived ? ' (archived)' : ''}` : 'An item that was deleted'), h('button', { class: 'icon-btn', html: I.close, 'aria-label': 'Remove item', onclick: () => { E.items.splice(i, 1); redraw(); } }));
+    }));
+    const addItem = live.filter((x) => !E.items.some((y) => y.itemId === x.id));
+    const itemPick = h('select', { 'aria-label': 'Add a default item', 'data-field': 'add-item' }, h('option', { value: '' }, addItem.length ? '+ Add a default item…' : JB.items?.length ? 'Every item is in' : 'No items yet (Jobs → Items)'), addItem.map((x) => h('option', { value: x.id }, `${x.name} · ${money2(x.price)}`)));
+    itemPick.addEventListener('change', () => { if (itemPick.value) { E.items.push({ itemId: itemPick.value, qty: 1 }); redraw(); } });
+    const body = () => ({ name: E.name.trim(), icon: E.icon.trim() || '🧰', list: E.list, whoCreates: E.whoCreates, stack: !!E.stack, billing: E.billing, items: E.items, dueDays: E.dueDays, steps: E.steps.map((s) => ({ ...(s.id ? { id: s.id } : {}), kind: s.kind, name: s.name, stage: s.stage || null, who: s.who || { type: 'anyone' }, canSkip: !!s.canSkip, settings: s.settings || {} })) });
+    const keep = (y) => { const i = JB.flows.findIndex((x) => x.id === y.id); if (i >= 0) JB.flows[i] = y; else JB.flows.push(y); };
+    const save = async (publish) => {
+      try {
+        let y = await api('PATCH', `/job-flows/${E.id}`, body());
+        if (publish) y = await api('POST', `/job-flows/${E.id}/publish`);
+        keep(y);
+        toast(publish ? `Published version ${y.version?.n}. New jobs use it; jobs already going keep theirs.` : 'Saved');
+        JB.edit = null;
+        renderTool(true);
+      } catch (e) { E.err = e.message; redraw(); }
+    };
+    return [
+      h('div', { class: 'jb-bh' }, h('button', { class: 'btn small', 'data-act': 'back', onclick: () => { JB.edit = null; renderTool(true); } }, '← Job Flows'), h('span', { style: 'flex:1' }),
+        f?.version ? h('small', { class: 'muted' }, `Version ${f.version.n} is live`) : h('small', { class: 'muted' }, 'Not published yet')),
+      h('div', { class: 'jb-nameline' }, icon, name),
+      h('div', { class: 'row2' }, h('label', {}, 'For the jobs on', list), h('label', {}, 'Who starts jobs on it', who)),
+      h('label', { class: 'pick' }, stackBox, 'Give each job a 📁 Files stack (photos, plans, notes), seen by whoever sees the job'),
+      h('div', { class: 'jb-money' }, h('label', {}, 'Billing', bill), h('div', { class: 'row2' }, h('div', {}, h('small', { class: 'muted' }, 'Default items on a new job'), itemRows, itemPick), h('label', {}, 'Invoices due in (days)', due))),
+      h('div', { class: 'jb-scards' }, E.steps.map(stepCard)),
+      add,
+      E.err ? h('p', { class: 'err' }, E.err) : null,
+      h('div', { class: 'jb-save' }, h('button', { class: 'btn', 'data-act': 'save', onclick: () => save(false) }, 'Save draft'), h('button', { class: 'btn primary-btn', 'data-act': 'publish', onclick: () => save(true) }, f?.version ? 'Publish changes' : 'Publish')),
+      h('small', { class: 'muted' }, 'Publishing makes a new version. Jobs already on this flow keep the version they started on.'),
+    ].filter(Boolean);
+  }
   // The visit you came from, at the top of the job: when, who, directions, done.
   function prVisitBar(p, t, r) {
     const v = PR.visit && (PR.visits.get(r.id) || []).find((x) => x.id === PR.visit);
@@ -18275,14 +19362,15 @@
     const mins = h('select', {}, [10, 15, 20, 30, 45, 60, 90].map((n) => h('option', { value: n, selected: n === 20 }, `${n} minutes`)));
     const go = async (email) => {
       try {
-        const out = await api('POST', `/visits/${v.id}/on-my-way`, { minutes: Number(mins.value), email });
+        const out = await sendOk('POST', `/visits/${v.id}/on-my-way`, { minutes: Number(mins.value), email });
+        if (!out || out.alreadySent) return;
         closeSheet();
         if (email) custSaid(out, who, 'On my way');
         else if (out.texted) toast(`On my way texted to ${who}`);
         else textCustomer(out.sms);
       } catch (e) { toast(e.message); }
     };
-    sheet(`On my way · ${who}`, [
+    sheet(`On my way · ${v.kind || 'Visit'} · ${who}`, [
       h('label', {}, 'I’ll be there in about', mins),
       c?.dne ? h('p', { class: 'day-hint' }, `${who} is marked do not contact.`) : null,
       h('div', { class: 'btns' },
@@ -18294,7 +19382,8 @@
   async function remindNow(t, r, v) {
     const c = custOfJob(t, r);
     try {
-      const out = await api('POST', `/visits/${v.id}/remind`);
+      const out = await sendOk('POST', `/visits/${v.id}/remind`);
+      if (!out || out.alreadySent) return;
       custSaid(out, c?.name || 'The customer', 'Reminder');
       if (!out.emailed && out.sms) textCustomer(out.sms);
     } catch (e) { toast(e.message); }
@@ -18303,7 +19392,8 @@
     const c = custOfJob(t, r);
     if (!S.workspace?.custMsgs?.reviewUrl) return amAdmin() ? openSettings('general', '.cm-sec') : toast('Ask an owner to add the team’s review link in Settings.');
     try {
-      const out = await api('POST', `/records/${r.id}/review-request`);
+      const out = await sendOk('POST', `/records/${r.id}/review-request`);
+      if (!out || out.alreadySent) return;
       custSaid(out, c?.name || 'The customer', 'Review request');
       if (!out.emailed && out.sms) textCustomer(out.sms);
     } catch (e) { toast(e.message); }
@@ -21966,10 +23056,30 @@
         p.kind === 'back' ? h('button', { class: 'btn small', onclick: () => { MP.map.closePopup(); savePin(p, false, { done: !p.done }); } }, p.done ? 'Not done' : 'Done') : null,
         del));
   }
+  // Jobs and clients (PHASE4.md §2): looked up by the server each time, never kept; a pin opens the job.
+  function mapJobsLoad() {
+    MP.jobBusy = true;
+    api('GET', '/map/jobs' + (MP.jobUndated ? '?undated=1' : '')).then((y) => { MP.jobPts = y; }).catch((e) => { MP.jobPts = { points: [], more: 0, missing: 0 }; toast(e.message); }).finally(() => { MP.jobBusy = false; if (MP.mode === 'jobs') { mapDraw(true); renderTool(true); } });
+  }
+  function drawJobs(fit) {
+    const pts = MP.jobPts?.points || [];
+    const color = (x) => (x.kind === 'client' ? '#8a94a6' : x.next ? '#e8890c' : x.flow ? '#1f9d55' : '#6b5cf0');
+    for (const x of pts) {
+      const m = L.circleMarker([x.lat, x.lng], { radius: x.kind === 'client' ? 6 : 9, color: '#fff', weight: 2, fillColor: color(x), fillOpacity: 1, bubblingMouseEvents: false });
+      m.bindPopup(() => h('div', { class: 'map-pop', 'data-point': x.id },
+        h('small', { class: 'map-kind' }, x.kind === 'client' ? 'Client, no job' : [x.scheduled ? dueLabel(x.scheduled) : 'No day', x.stage].filter(Boolean).join(' · ')),
+        h('b', {}, x.name), h('p', { class: 'map-note' }, x.address),
+        x.next ? h('small', { class: 'map-when' }, `Next: ${x.next}`) : x.flow ? h('small', { class: 'map-when' }, `${x.flow} · done`) : null,
+        x.kind === 'job' ? h('div', { class: 'map-pop-btns' }, h('button', { class: 'btn small primary-btn', onclick: () => { MP.map.closePopup(); jbOpenById(x.id); } }, 'Open the job')) : null), { maxWidth: 260 });
+      m.addTo(MP.group);
+    }
+    if (fit && pts.length) MP.map.fitBounds(pts.map((x) => [x.lat, x.lng]), { padding: [30, 30], maxZoom: 14 });
+  }
   function mapDraw(fit) {
     if (!MP.group) return;
     MP.group.clearLayers();
     MP.live = null;
+    if (MP.mode === 'jobs') return drawJobs(fit);
     if (MP.mode === 'routes') return drawRoute(fit);
     if (MP.mode === 'miles') return drawDrives(fit);
     if (MP.show === 'all' || MP.show === 'done') {
@@ -22221,8 +23331,22 @@
   }
 
   function mapTool() {
-    const modes = h('div', { class: 'seg map-mode' }, [['canvass', 'Canvassing'], ['miles', 'Mileage'], ...(toolOn('projects') ? [['routes', 'Job routes']] : [])].map(([k, l]) => h('button', { class: (MP.mode || 'canvass') === k ? 'on' : '', onclick: () => { MP.mode = k; renderTool(true); mapDraw(true); } }, l)));
+    const modes = h('div', { class: 'seg map-mode' }, [['canvass', 'Canvassing'], ['miles', 'Mileage'], ...(toolOn('projects') ? [['routes', 'Job routes'], ['jobs', 'Jobs']] : [])].map(([k, l]) => h('button', { class: (MP.mode || 'canvass') === k ? 'on' : '', 'data-mode': k, onclick: () => { MP.mode = k; if (k === 'jobs') mapJobsLoad(); renderTool(true); mapDraw(true); } }, l)));
     if (MP.mode === 'miles') return milesPanel(modes);
+    if (MP.mode === 'jobs' && toolOn('projects')) {
+      const box = mapBox();
+      box.classList.remove('ml-map');
+      if (MP.map) setTimeout(() => MP.map.invalidateSize(), 0);
+      if (!MP.jobPts && !MP.jobBusy) mapJobsLoad();
+      const y = MP.jobPts;
+      const und = h('input', { type: 'checkbox', checked: !!MP.jobUndated, 'data-field': 'undated' });
+      und.addEventListener('change', () => { MP.jobUndated = und.checked; MP.jobPts = null; mapJobsLoad(); mapDraw(); renderTool(true); }); // no old points while the new ones load
+      const jobsN = (y?.points || []).filter((x) => x.kind === 'job').length, clientsN = (y?.points || []).filter((x) => x.kind === 'client').length;
+      return [modes,
+        h('div', { class: 'map-run' }, h('span', { class: 'map-stats', 'data-jobs': jobsN }, !y ? 'Loading jobs…' : y.off ? 'The map isn’t set up yet (MAPBOX_TOKEN).' : `${plural(jobsN, 'job')} in the next 30 days${clientsN ? ` · ${plural(clientsN, 'client')} without a job` : ''}${y.missing ? ` · ${y.missing} couldn’t be found on the map` : ''}${y.more ? ` · ${y.more} more not shown` : ''}`),
+          h('label', { class: 'pick' }, und, 'Jobs with no day too')),
+        box];
+    }
     if (MP.mode === 'routes' && toolOn('projects')) {
       const box = mapBox();
       box.classList.remove('ml-map');
@@ -22667,8 +23791,8 @@
     mail.addEventListener('click', async () => {
       mail.disabled = true;
       try {
-        upsertSign(await api('POST', `/signs/${x.id}/email`));
-        toast(`Emailed to ${x.signer.email}`);
+        const y = await sendOk('POST', `/signs/${x.id}/email`);
+        if (y && !y.alreadySent) { upsertSign(y); toast(`Emailed to ${x.signer.email}`); }
       } catch (err) {
         toast(err.message);
       }
@@ -25590,7 +26714,7 @@
   const setPages = (admin, billing) => [
     ['You', [['profile', 'Profile & sign-in', '👤', 'Your email, password and the devices you’re signed in on.'], ['notify', 'Notifications', '🔔', 'What this device tells you, and how.'], ['prefs', 'Preferences', '🎛️', 'How Kloomie looks and works for you.'], ['signature', 'Signature', '✍️', 'Your email signature, and the one you sign documents with.']]],
     ['Team', [['members', 'Members & invites', '👥', 'Who’s on the team, their roles, and how new people join.'], ...(admin ? [['access', 'What members can use', '🔐', 'Choose what members see and use. Owners and admins always have everything.']] : []), ['roles', 'Roles', '🏷️', 'The kinds of work people do, so tasks can go to a role.'], ...(admin ? [['teamset', 'Team settings', '🛠️', 'Time zone, clean-up and messages for the whole team.']] : [])]],
-    ['Business', [['business', 'Business', '🏢', 'Your brand, Company HQ, business cards and signatures.'], ...(admin ? [['website', 'Website', '🌐', 'Get a website built, or connect the one you have, so its leads land in Contacts.']] : []), ...(billing ? [['billing', 'Billing', '💳', 'Your plan, seats and payment.']] : [])]],
+    ['Business', [['business', 'Business', '🏢', 'Your brand, Company HQ, business cards and signatures.'], ...(admin ? [['docs', 'Quotes & invoices', '🧾', 'Business details, your signature, and how quotes look and are accepted.']] : []), ...(admin ? [['website', 'Website', '🌐', 'Get a website built, or connect the one you have, so its leads land in Contacts.']] : []), ...(billing ? [['billing', 'Billing', '💳', 'Your plan, seats and payment.']] : [])]],
     ['Data', [['data', 'Export & delete', '🗂️', 'Take a copy of your things or the team’s, or leave and delete.']]],
   ];
   // Older names (the tabs before 2026-11-20, still in links, Help and saved on devices) → their page now.
@@ -25609,6 +26733,7 @@
     roles: 'roles sales installs marketing',
     teamset: 'time zone auto-clear clear remove items customer messages tools automations apps integrations',
     business: 'brand culture logo colour color mission values company hq business card signatures',
+    docs: 'quotes invoices business details address phone license signature terms footer valid expiry prices accept',
     billing: 'billing plan seats payment card trial invoice',
     website: 'website site web build design pages domain hosting leads form care',
     data: 'export download zip delete team account leave close',
@@ -25896,6 +27021,62 @@
         toolOn('signs') ? row('signs', 'Signatures', waiting ? `${waiting} waiting to be signed` : 'Send documents to sign and see who signed', () => { SG.filter = null; openTool('signs'); }) : null));
     }
 
+    // Quotes & invoices (PHASE3B.md §3, owners and admins): business details, the business signature ("Prepared by"),
+    // how long quotes are valid, default terms and a footer, line prices, and how customers accept.
+    if (page === 'docs' && admin) {
+      const sec = h('section', { class: 'docs-sec' }, h('h3', {}, 'Quotes & invoices'), h('p', { class: 'day-hint' }, 'Loading…'));
+      P('docs', sec);
+      api('GET', '/docs-settings').then((d) => {
+        const inp = (k, v, ph, type = 'text') => h('input', { type, value: v ?? '', placeholder: ph, 'data-doc': k });
+        const b = d.business || {};
+        const f = {
+          name: inp('business-name', b.name, ws.name), address: inp('business-address', b.address, 'Street, city, state'), phone: inp('business-phone', b.phone, 'Phone', 'tel'),
+          email: inp('business-email', b.email, 'Email', 'email'), website: inp('business-website', b.website, 'https://…', 'url'), license: inp('business-license', b.license, 'License number'),
+        };
+        const valid = h('input', { type: 'number', min: 0, max: 365, step: 1, value: d.validDays, 'data-doc': 'validDays' });
+        const terms = h('textarea', { rows: 4, maxlength: 4000, 'data-doc': 'terms', placeholder: 'Payment terms, warranty, what’s included…' }, d.terms || '');
+        const footer = h('input', { type: 'text', maxlength: 300, value: d.footer || '', 'data-doc': 'footer', placeholder: 'A line at the bottom of every quote and invoice' });
+        const prices = h('input', { type: 'checkbox', checked: d.showPrices !== false, 'data-doc': 'showPrices' });
+        const contact = h('input', { type: 'checkbox', checked: !!d.showClientContact, 'data-doc': 'showClientContact' });
+        const accept = h('select', { 'data-doc': 'accept' }, [['type', 'Type their name'], ['draw', 'Draw a signature']].map(([k, l]) => h('option', { value: k, selected: d.accept === k }, l)));
+        const save = h('button', { class: 'btn primary-btn' }, 'Save');
+        save.addEventListener('click', async () => {
+          try {
+            await api('PATCH', '/docs-settings', { business: Object.fromEntries(Object.entries(f).map(([k, x]) => [k, x.value.trim()])), validDays: Number(valid.value || 0), terms: terms.value, footer: footer.value, showPrices: prices.checked, showClientContact: contact.checked, accept: accept.value });
+            toast('Saved');
+          } catch (e) { toast(e.message); }
+        });
+        // The business signature: drawn here, or an image, with who signs.
+        const pad = signPad();
+        const who = h('input', { type: 'text', maxlength: 80, value: d.signature?.name || S.me.member || '', placeholder: 'Who signs', 'data-doc': 'sig-name' });
+        const title = h('input', { type: 'text', maxlength: 80, value: d.signature?.title || '', placeholder: 'Title (Owner, Manager…)', 'data-doc': 'sig-title' });
+        const file = h('input', { type: 'file', accept: 'image/png,image/jpeg', 'aria-label': 'Upload a signature image' });
+        const now = h('div', { class: 'doc-sig-now' });
+        const drawNow = () => now.replaceChildren(...(d.signature ? [h('img', { src: d.signature.url, alt: 'Your business signature' }), h('small', {}, `${d.signature.name}${d.signature.title ? ', ' + d.signature.title : ''}`),
+          h('button', { class: 'btn small', onclick: async () => { try { await api('DELETE', '/docs-settings/signature'); d.signature = null; drawNow(); toast('Signature removed'); } catch (e) { toast(e.message); } } }, 'Remove')] : [h('small', { class: 'muted' }, 'No signature yet: quotes go out without “Prepared by”.')]));
+        drawNow();
+        const putSig = async (image) => {
+          try { const y = await api('PUT', '/docs-settings/signature', { image, name: who.value.trim(), title: title.value.trim() }); d.signature = y.signature; drawNow(); pad.clear(); toast('Signature saved'); }
+          catch (e) { toast(e.message); }
+        };
+        file.addEventListener('change', () => { const x = file.files[0]; if (!x) return; if (x.size > 200_000) return toast('Keep the signature under 200 KB.'); const rd = new FileReader(); rd.onload = () => putSig(rd.result); rd.readAsDataURL(x); });
+        const sigBox = h('div', { class: 'doc-sig' }, now,
+          h('small', { class: 'muted' }, 'Draw it below (a new one replaces the old), or upload an image:'),
+          pad.pad, h('div', { class: 'row2' }, who, title),
+          h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: () => (pad.inked() ? putSig(pad.data()) : toast('Draw the signature first.')) }, 'Save signature'), h('button', { class: 'btn', onclick: () => pad.clear() }, 'Clear'), file));
+        sec.replaceChildren(h('h3', {}, 'Quotes & invoices'),
+          h('p', { class: 'day-hint' }, 'What your customers see on quotes and invoices. Your logo and colour come from Business → brand. A quote keeps the look it was sent with.'),
+          h('h4', {}, 'Business details'), h('div', { class: 'docs-grid' }, f.name, f.address, f.phone, f.email, f.website, f.license),
+          h('label', {}, 'Quotes are valid for (days, 0 = they don’t expire)', valid),
+          h('label', {}, 'Default terms', terms), h('label', {}, 'Footer', footer),
+          h('label', { class: 'pick' }, prices, 'Show each line’s price (the total always shows)'),
+          h('label', { class: 'pick' }, contact, 'Show the client’s email and phone on quotes'),
+          h('label', {}, 'Customers accept by', accept),
+          h('div', { class: 'btns' }, save),
+          h('h4', {}, 'Prepared by (your signature)'), sigBox);
+      }).catch((e) => sec.replaceChildren(h('h3', {}, 'Quotes & invoices'), h('p', { class: 'warn' }, e.message)));
+    }
+
     if (['profile', 'signature', 'data'].includes(page)) {
       // Your email
       const em = h('section', {}, h('h3', {}, 'Your email'));
@@ -26047,13 +27228,13 @@
     if (navOpen('#projects')) return navPress($('#projects'), '.pj-panel-h button[aria-label="Close"]') || navPress($('#projects')) || closeProjects();
     if (toolOpen) return navPress($('#tool')) || closeTool();
     if (navPress(document, 'button.cc-pulse-x')) return; // the campaign's Pulse, open beside the page
-    const page = $({ home: '#home', day: '#day', apps: '#apps', camps: '#campsWrap', column: '#panes', menu: '#menuPage' }[S.tab] || '#home');
+    const page = $({ home: '#home', day: '#day', apps: '#apps', camps: '#campsWrap', column: '#panes', menu: '#menuPage', chat: '#chat' }[S.tab] || '#home');
     if (navPress(page)) return;
     if (S.tab === 'menu') return goHome(MENU.back);
     let to = NAVB.tabs.pop();
-    while (to && (to === S.tab || to === 'menu' || to === 'chat')) to = NAVB.tabs.pop();
+    while (to && (to === S.tab || to === 'menu')) to = NAVB.tabs.pop();
     NAVB.going = true;
-    try { setTab(to || 'home'); } finally { NAVB.going = false; }
+    try { setTab(to || 'home', 'page'); } finally { NAVB.going = false; }
   }
   // After anything you do: a step to go back to while you're away from Home, none left over once you're back.
   function navArm() {

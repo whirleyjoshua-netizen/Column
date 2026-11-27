@@ -5,6 +5,7 @@
 // - A docked column (340px) and a phone (2026-11-19): ☰ opens a menu page of app icons, four apps in a dock at the
 //   bottom, pins on the menu page; the toolbar stays hidden and can't be tabbed into.
 // - White everywhere, even on a computer set to dark mode; nothing spills off a phone's screen.
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
@@ -13,8 +14,8 @@ const DIR = S + '/dk/shell_ui';
 FS.rmSync(DIR, { recursive: true, force: true });
 FS.mkdirSync(DIR, { recursive: true });
 const PORT = 4967, CDP = 9528, APP = `http://127.0.0.1:${PORT}/`;
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: 'ignore' });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1280,820', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, PORT: String(PORT), PUBLIC_URL: APP.slice(0, -1), DATA_DIR: DIR + '/data', MAIL_OUTBOX: '', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', SKIP_SETUP: '1' }, stdio: 'ignore' });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${DIR}/chrome`, '--no-first-run', '--window-size=1280,820', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
@@ -68,11 +69,11 @@ try {
   ok(side.l === 0 && side.w >= 220 && side.w <= 240, `a sidebar on the left when there’s room (${JSON.stringify(side)})`);
   ok(!(await A.ev(shown('#menuBtn'))) && (await A.ev(`document.body.classList.contains('wide')`)), 'no ☰ when the sidebar is there');
   const labels = await A.ev(`[...document.querySelectorAll('#tabs [data-tab]:not(.tab-sub)')].map((b) => b.textContent)`);
-  ok(JSON.stringify(labels) === JSON.stringify(['Home', 'Agents', 'Workspace', 'Apps & Integrations']), `Home, Agents, Workspace and Apps & Integrations (Tasks is in Workspace, Chat is in Tools), by name, whatever tabs were saved before (${labels})`);
+  ok(JSON.stringify(labels) === JSON.stringify(['Home', 'Chat', 'Agents', 'Workspace', 'Apps & Integrations']), `Home, Chat, Agents, Workspace and Apps & Integrations (Tasks is in Workspace), by name, whatever tabs were saved before (${labels})`);
   ok(await A.ev(`[...document.querySelectorAll('#tabs [data-tab]')].every((b) => b.querySelector('.tab-ic svg'))`), 'each with an icon');
   ok(await A.ev(shown('#settingsBtn')) && !(await A.ev(`!!document.querySelector('#toolsBtn, #tabs .tabs-edit')`)), 'Settings is in it (All tools and pins are in Workspace now, 2026-11-16)');
   await A.ev(`document.querySelector('#tabs [data-tab=tools]').click(); true`); await A.tap(`document.querySelector('#menu [data-tool=chat]')`);
-  ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden') && !!document.querySelector('#split.chat-split #chat') && !document.querySelector('#tabs [data-tab=chat]')`), 'Chat is in Tools now: picking it opens it in the split (it’s not a sidebar tab)');
+  ok(await A.until(`!document.querySelector('#chat').classList.contains('hidden') && !!document.querySelector('#split.chat-split #chat')`), 'Chat in Tools: picking it opens it in the split');
   // Settings fills the page beside the sidebar.
   await A.tap(`document.querySelector('#settingsBtn')`);
   ok(await A.until(`!document.querySelector('#settings').classList.contains('hidden')`), 'Settings opens');

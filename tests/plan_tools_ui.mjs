@@ -2,6 +2,7 @@
 // (an email, a signature, a payment, files, a call list, a meeting: it ticks itself off when that's done) and starts it,
 // and keeps its checklist; under a phase, its resources, what it needs, and a tool for each task. Members get it too
 // (automations stay with owners and admins). A task's tile shows its tool.
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { spawn } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
@@ -15,8 +16,8 @@ let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 try { (await import('node:child_process')).execSync(`pkill -f remote-debugging-port=${CDP}`); await sleep(400); } catch {}
 FS.rmSync(`${S}/dk/chrome-plantools`, { recursive: true, force: true });
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-plantools`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
-const srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${S}/dk/chrome-plantools`, '--no-first-run', '--window-size=1400,900', 'about:blank'], { stdio: 'ignore' });
+const srv = spawn('node', ['index.js'], { cwd: SERVER_DIR, env: { ...process.env, SKIP_SETUP: '1', PORT: String(PORT), DATA_DIR: DIR, MAIL_OUTBOX: '1', DATABASE_URL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
 srv.log = ''; srv.stdout.on('data', (d) => (srv.log += d)); srv.stderr.on('data', (d) => (srv.log += d));
 async function tab(url) {
   let t;
@@ -70,18 +71,18 @@ try {
     await sleep(500);
     await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
     await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
-    await A.until(`!!document.querySelector('.camp-card') || !!${T('.cc-kpis')}`);
-    if (!(await A.ev(`!!${T('.cc-kpis')}`))) await A.tap(`document.querySelector('.camp-card')`);
-    await A.until(`!!${T('.cc-kpis')}`);
+    await A.until(`!!document.querySelector('.camp-card') || !!${T('.cc-chips')}`);
+    if (!(await A.ev(`!!${T('.cc-chips')}`))) await A.tap(`document.querySelector('.camp-card')`);
+    await A.until(`!!${T('.cc-chips')}`);
     await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
     await tabTo('plan');
     await A.until(`!!${T('.cc-planner')}`);
   };
   await open(auth.token);
-  const tile = (txt) => `[...document.querySelectorAll('#camps .cc-ptree .cc-ttile')].find((x) => x.querySelector('.cc-tt-t').textContent === ${JSON.stringify(txt)})`;
+  const tile = (txt) => `[...document.querySelectorAll('#camps .cc-row')].find((x) => x.querySelector('.cc-row-name').textContent === ${JSON.stringify(txt)})`;
 
   // A task: what it's done with.
-  await A.tap(tile('Call the Lee family'));
+  await A.tap(`${tile('Call the Lee family')}.querySelector('.cc-row-name')`);
   await A.until(`${T('.cc-ppanel .cc-pp-name')}?.value === 'Call the Lee family'`);
   await A.tap(T('.cc-pp-tool'));
   ok(await A.until(`${T('.cc-ptools')}?.dataset.for === 'task' && ${T('.cc-ptools h3')}.textContent.includes('Call the Lee family')`), '🧰 Add tool on a task opens its tools in the panel (no more “coming soon”)');
@@ -89,10 +90,10 @@ try {
   await A.tap(T('.pt-k[data-kind=email]'));
   ok((await waitFor(async () => (await taskNow('Call the Lee family'))?.action?.kind === 'email')), 'picking “Send an email” saves it on the task');
   ok(await A.until(`${T('.pt-k[data-kind=email]')}?.classList.contains('on') && ${T('.pt-start')}?.textContent.includes('Send email')`), 'it’s marked, with a Send email button to start it');
-  ok(await A.until(`${tile('Call the Lee family')}?.querySelector('.cc-tool-ic')?.textContent === '✉️'`), 'the task’s tile shows ✉️');
+  ok(await A.until(`${tile('Call the Lee family')}?.querySelector('.cc-tool-ic')?.textContent === '✉️'`), 'the task’s row shows ✉️');
   await A.tap(T('.pt-start'));
   ok(await A.until(`!document.querySelector('#split').classList.contains('hidden') && /email/i.test(document.querySelector('#split').textContent) && !!${T('.cc-ptools')}`, 4000), 'Send email opens Email beside the plan');
-  ok(await A.until(`(() => { const [a, b] = ['.cc-ptree', '.cc-ptools'].map((x) => document.querySelector('#camps ' + x).getBoundingClientRect()); return a.width > 240 && b.left >= a.right - 1; })()`), 'with Email open, the plan and its panel sit side by side, not squeezed into three columns (found in the browser check)');
+  ok(await A.until(`(() => { const [a, b] = ['.cc-phases', '.cc-ptools'].map((x) => document.querySelector('#camps ' + x).getBoundingClientRect()); return a.width > 240 && b.left >= a.right - 1; })()`), 'with Email open, the plan and its panel sit side by side, not squeezed into three columns (found in the browser check)');
   await A.tap(`document.querySelector('#split .split-close')`);
   ok(await A.until(`document.querySelector('#split').classList.contains('hidden') || !document.querySelector('#split .split-close')`), 'and it closes');
   ok(await A.until(`!!${T('.cc-ptools')}`), 'back on the plan, its tools are still there');
@@ -120,7 +121,7 @@ try {
   await A.pick(`document.querySelector('#camps .pt-row[data-task] select')`, 'calls');
   const first = await A.ev(`document.querySelector('#camps .pt-row[data-task]').dataset.task`);
   ok(await waitFor(async () => (await api('GET', '/state')).tasks.find((x) => x.id === first)?.action?.kind === 'calls'), 'a task’s tool set from the phase’s list');
-  ok(await A.until(`document.querySelector('#camps .cc-ttile[data-task="${first}"] .cc-tool-ic')?.textContent === '📞'`), 'and its tile shows 📞');
+  ok(await A.until(`document.querySelector('#camps .cc-row[data-task="${first}"] .cc-tool-ic')?.textContent === '📞'`), 'and its row shows 📞');
   // A link for everyone in the phase.
   await A.tap(T('.pt-res .res-add[data-kind=link]'));
   await A.until(`!!${T('.pt-res .res-form')}`);
@@ -133,14 +134,14 @@ try {
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   await sleep(300);
   // A task now shows its phase's resource.
-  await A.tap(tile('Call the Diaz family'));
+  await A.tap(`${tile('Call the Diaz family')}.querySelector('.cc-row-name')`);
   await A.tap(T('.cc-pp-tool'));
   ok(await A.until(`${T('.cc-ptools')}?.dataset.for === 'task' && ${T('.cc-ptools')}.textContent.includes('Call script')`), 'a task’s tools name what its phase has (the call script)');
   // Back closes it.
   await A.tap(T('.pt-back'));
   ok(await A.until(`${T('.cc-ppanel .cc-pp-name')}?.value === 'Call the Diaz family'`), 'back goes to the task');
-  // From a phase tile straight to its tools.
-  await A.tap(`document.querySelectorAll('#camps .cc-ptile.phase')[1]`);
+  // From a phase straight to its tools.
+  await A.tap(`document.querySelectorAll('#camps .cc-phase')[1].querySelector('.cc-phase-t')`);
   await A.tap(T('.cc-pp-tool'));
   ok(await A.until(`${T('.cc-ptools')}?.dataset.for === 'phase' && ${T('.cc-ptools h3')}.textContent.includes('Book installs')`), 'a phase’s Add tool opens its tools');
   // Phone: it fits.
@@ -150,7 +151,7 @@ try {
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
   // A member: Add tool, but no Add automation.
   await open(sam.token);
-  await A.tap(tile('Send quotes'));
+  await A.tap(`${tile('Send quotes')}.querySelector('.cc-row-name')`);
   await A.until(`${T('.cc-ppanel .cc-pp-name')}?.value === 'Send quotes'`);
   ok(await A.ev(`!!${T('.cc-pp-tool')} && !${T('.cc-pp-auto')}`), 'a member gets Add tool, not Add automation');
   await A.tap(T('.cc-pp-tool'));

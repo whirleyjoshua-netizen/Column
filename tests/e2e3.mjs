@@ -1,8 +1,9 @@
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
 const S = process.argv[2];
 const APP = 'http://127.0.0.1:4797/';
-const chrome = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${S}/dk/chrome2`, '--no-first-run', '--window-size=1200,900', 'about:blank'], { stdio: 'ignore' });
+const chrome = spawn(CHROME, ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${S}/dk/chrome2`, '--no-first-run', '--window-size=1200,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
@@ -120,7 +121,7 @@ const docItems = (await api('GET', '/state')).items.filter((x) => x.type === 'te
 ok(tt.files?.some((id) => docItems.find((x) => x.id === id)?.title === 'Call Desert Auto'), 'the doc is attached to the task');
 await A.ev(`document.querySelector('.dv-bar [aria-label="Close doc"]').click()`);
 // the report, saved as a doc and linked from the post
-await A.ev(`document.querySelector('#camps .cc-tab[data-ctab=activity]')?.click(); true`); // Write a report is under Activity (2026-11-20)
+await A.ev(`document.querySelector('#camps .cc-tab[data-ctab=progress]')?.click(); true`); // Write a report is on Progress (2026-11-25)
 await A.tap(`[...document.querySelectorAll('button')].find((b) => b.textContent === 'Write a report' || b.textContent === 'Weekly check-in')`);
 await A.ev(`(() => { const t = document.querySelector('#sheet textarea'); t.value = '- Desert Auto wants a demo'; })()`);
 await A.ev(`document.querySelector('#sheet .primary-btn').click()`);

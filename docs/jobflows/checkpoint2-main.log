@@ -1,0 +1,74 @@
+Run on main a9f0ebb + these tests only (no implementation), 2026-11-24, after the checkpoint 2 review fixes.
+Command per file: node tests/<file>.mjs .   (repo root; each test starts its own server, port and data folder; a server that doesn't start is now an explicit FAIL)
+
+=== tests/jobflows_defs.mjs (exit 1)
+FAIL an owner makes a flow, a draft with no version yet: 404 {"error":"Unknown endpoint"}
+FAIL its steps get ids
+FAIL a member can’t make a flow: 404
+FAIL a member doesn’t see an unpublished flow
+FAIL a flow with no steps is refused: 404
+FAIL 31 steps are refused: 404
+FAIL a step kind not offered yet (quote) is refused: 404
+FAIL a list that isn’t a job list here is refused: 404
+FAIL a step for someone not on the team is refused: 404
+FAIL publishing makes version 1: 404 {"error":"Unknown endpoint"}
+FAIL threw: TypeError: Cannot read properties of undefined (reading 'steps')
+11 FAILED
+
+=== tests/jobflow_run.mjs (exit 1)
+PASS (setup) automation “Step done” 
+FAIL (setup) automation “Flow done” Pick what sets it off.
+FAIL (setup) the flow is published: 404 Unknown endpoint
+FAIL starting a job makes the job and its run of 8 steps: 404 Unknown endpoint
+FAIL the same key again gives back the same job (a retry makes no second job)
+FAIL the same key with a different job is refused: 404
+FAIL only one job was made
+FAIL it starts on Add client info; Next picks the client
+FAIL Add client info has no Done button: it finishes when a client is on the job: 404
+FAIL a client on the job finishes the first step
+FAIL filling its address finishes Add job info; next: book it
+FAIL Next opens the visit sheet
+FAIL a visit booked finishes Book on schedule
+FAIL and the job is Scheduled
+FAIL threw: TypeError: Cannot read properties of undefined (reading 'values')
+14 FAILED
+
+=== tests/jobs_list.mjs (exit 1)
+FAIL a job with no campaign is listed: 404
+FAIL a job an ordinary campaign drives is listed, marked legacy, with no run
+FAIL a job on a flow shows its flow, steps and current step
+FAIL jobs from the generic Jobs list are listed too
+FAIL the owner sees jobs in their private project
+PASS a record in a list that isn’t a job list (CRM) isn’t a job
+FAIL a job shows its client’s name
+FAIL a member sees the team’s jobs but not a private project’s
+PASS the list gives a member the client’s name, not their email or phone
+PASS a member can’t open the run of a job they can’t see
+PASS another team sees none of them
+PASS another team can’t open a run
+FAIL a member may start a job on a flow open to everyone: 404 Unknown endpoint
+FAIL a discount over the rule’s limit needs an OK here too, as it does for a new record: 404
+PASS and no job was made
+PASS a member can’t start a job in a project they can’t see
+FAIL a member can’t start a job on a flow for owners and admins
+FAIL threw: TypeError: Cannot read properties of undefined (reading 'id')
+11 FAILED
+
+=== tests/jobflow_stage.mjs (exit 1)
+FAIL (setup) a job on the flow
+FAIL threw: TypeError: Cannot read properties of undefined (reading 'id')
+2 FAILED
+
+=== tests/jobflow_hidden.mjs (exit 1)
+FAIL (setup) a job on a flow, with its run
+PASS the run isn’t in the app’s campaigns
+PASS nor are its steps in the app’s steps
+PASS the ordinary campaign on the same job is
+PASS the campaign routes can’t open it
+PASS or change it
+PASS or add a step to it
+PASS or save it as a saved campaign
+FAIL or make it a parent (404, no such campaign): 200 
+PASS or delete it
+FAIL threw: TypeError: Cannot read properties of undefined (reading 'id')
+3 FAILED

@@ -19,9 +19,10 @@ import { providers as calProviders, ics as ICS } from './calendar.js';
 import { llms, llmError, complete } from './llm.js';
 import { fileText, officeKind } from './extract.js';
 import { PdfError, stampPdf, addCertificate, pageCount, writeDoc, writeForm } from './pdf.js';
-import { routesOn, dayRoute, driveDistance } from './routes.js';
+import { routesOn, dayRoute, driveDistance, geocodeOnce } from './routes.js';
 import { projectsModule } from './projects.js';
 import { invoicesModule } from './invoices.js';
+import { jobFlowsModule, isJobRun } from './jobflows.js';
 import { inventoryModule } from './inventory.js';
 import { publicApiModule } from './publicapi.js';
 import { quickbooksModule } from './quickbooks.js';
@@ -44,6 +45,7 @@ import { whiteboardModule } from './whiteboard.js';
 import { techAiModule } from './techai.js';
 import { describeModule } from './describe.js';
 import { signoffModule } from './signoff.js';
+import { docsOf, cleanDocs, bizHtml, inkedPng } from './docs.js';
 import { cardsModule } from './cards.js';
 import { newsModule } from './news.js';
 import { qrSvg } from './qr.js';
@@ -588,7 +590,7 @@ const toolsOf = (ws) => Object.fromEntries(TOOL_KEYS.map((k) => [k, ws.settings?
 // everything. A tool off for the whole team (toolsOf) stays off for everyone.
 const MEMBER_DEFAULTS = { contacts: false, projects: true, camps: true, docs: true, chat: true, column: true, templates: true, inventory: true, bills: true, meetings: true, map: true, vault: true, whiteboard: true, teamSchedule: false, teamKpis: false, agentBuild: true };
 const MEMBER_LABEL = { contacts: 'Contacts', projects: 'Boards', camps: 'Campaigns', docs: 'Folders & Docs', chat: 'Chat', column: 'Stacks', templates: 'Templates', inventory: 'Inventory', bills: 'Finance', meetings: 'Meeting notes', map: 'Map', vault: 'Vault', whiteboard: 'Whiteboard', teamSchedule: 'The team’s schedule', teamKpis: 'The team’s numbers (Analytics)', agentBuild: 'Building your own agents' };
-const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates', 'records'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
+const MEMBER_ROUTES = { contacts: ['contacts', 'contact-groups'], projects: ['projects', 'project-templates', 'records', 'jobs', 'job-flows', 'job-items'], camps: ['board'], docs: ['docs', 'folders', 'dirs', 'doc-templates'], column: ['stacks'], templates: ['msg-templates'], inventory: ['inventory'], bills: ['money', 'bills', 'budgets', 'finance'], meetings: ['meetings'], map: ['trips', 'pins', 'zones', 'mileage', 'map'], vault: ['vault'], whiteboard: ['boards'], teamSchedule: ['workload', 'forecast', 'hours'] };
 const memberAccessOf = (ws) => Object.fromEntries(Object.keys(MEMBER_DEFAULTS).map((k) => [k, typeof ws.settings?.memberAccess?.[k] === 'boolean' ? ws.settings.memberAccess[k] : MEMBER_DEFAULTS[k]]));
 const memberMay = (ws, auth, k) => isAdmin(auth) || memberAccessOf(ws)[k] !== false;
 const memberOff = (k) => `Your team’s owners and admins have turned ${MEMBER_LABEL[k]} off for members.`;
@@ -612,7 +614,7 @@ const publicWorkspace = (ws, memberId) => ({
   setup: ws.setup || null,
   deleteAt: ws.deleteAt || null,
   deleteBy: ws.deleteAt ? ws.deleteBy : null,
-  stacks: ws.stacks.filter((x) => seesCampaign(x.campaignId, memberId)),
+  stacks: ws.stacks.filter((x) => seesStack(x, memberId)),
   channels: publicChannels(ws, memberId),
   chatPins: publicChatPins(ws, ws.chatPins, memberId),
   chatFolders: ws.chatFolders,
@@ -653,12 +655,14 @@ function imageType(buf) {
 }
 function serveLogo(req, res, url) {
   const id = url.pathname.slice('/brand/'.length);
-  const ws = /^[\w-]{8,40}$/.test(id) && Object.values(db.workspaces).find((x) => x.brand?.logo?.id === id);
+  // A logo, or a business signature (every one a team has had stays served: issued quotes show the one they were sent with).
+  const ws = /^[\w-]{8,40}$/.test(id) && Object.values(db.workspaces).find((x) => x.brand?.logo?.id === id || (x.docsFiles || []).some((f) => f.id === id));
   if (!ws) return send(res, 404, 'Not found');
-  fs.readFile(logoPath(ws.brand.logo), (err, data) => {
+  const file = ws.brand?.logo?.id === id ? ws.brand.logo : ws.docsFiles.find((f) => f.id === id);
+  fs.readFile(logoPath(file), (err, data) => {
     if (err) return send(res, 404, 'Not found');
     // A new upload gets a new id, so this address never changes content.
-    send(res, 200, data, { 'Content-Type': ws.brand.logo.mime, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+    send(res, 200, data, { 'Content-Type': file.mime, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
   });
 }
 // The short parts go into every AI request.
@@ -2497,7 +2501,35 @@ function linkInfo(ws, auth, type, id) {
 
 function validStack(ws, stackId, memberId) {
   const st = stackId && ws.stacks.find((s) => s.id === stackId);
-  return st && seesCampaign(st.campaignId, memberId) ? stackId : null;
+  return st && seesStack(st, memberId) ? stackId : null;
+}
+// A stack is a campaign's (seen with the campaign), a job's (seen by whoever sees the job: PHASE4.md §1), or the team's.
+function seesStack(st, memberId) {
+  if (st?.recordId) { const rec = db.records[st.recordId]; return !!rec && !!PJ.recordAt(rec.id, rec.wsId, memberId); }
+  return seesCampaign(st?.campaignId, memberId);
+}
+// The job stack an item lives in (its top item's), if any.
+function jobStackOfItem(x) {
+  const top = x && topItem(x);
+  const st = top?.stackId && db.workspaces[x.wsId]?.stacks.find((y) => y.id === top.stackId);
+  return st?.recordId ? st : null;
+}
+// A job is gone (or its list, or its board): its stack and the stack's files go as a deleted campaign's do.
+// Everything that goes with a deleted record (one, or its list's or board's): its visits, draft invoices, runs, gear
+// links, campaign links and job stack.
+function recordGoneAll(rec) { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); jobStackGone(rec); }
+function jobStackGone(rec) {
+  const ws = db.workspaces[rec.wsId];
+  if (!ws) return;
+  const gone = new Set(ws.stacks.filter((x) => x.recordId === rec.id).map((x) => x.id));
+  if (!gone.size) return;
+  for (const it of Object.values(db.items)) if (it.wsId === ws.id && gone.has(topItem(it)?.stackId)) deleteItem(it.id);
+  purgeTrash((e) => e.wsId === ws.id && gone.has(topItem(e.items[0])?.stackId));
+  ws.stacks = ws.stacks.filter((x) => !gone.has(x.id));
+  for (const ch of ws.channels) if (ch.pins) ch.pins = ch.pins.filter((p) => !(p.kind === 'stack' && gone.has(p.id)));
+  if (ws.chatPins) ws.chatPins = ws.chatPins.filter((p) => !(p.kind === 'stack' && gone.has(p.id)));
+  save();
+  broadcast(ws.id, { type: 'workspace' });
 }
 
 // Folders (the Folders tool; "dirs" here, since an uploaded folder is already an item called a folder).
@@ -2605,11 +2637,12 @@ function validChannel(ws, channelId, memberId) {
 // ---------- pinned to a chat: a stack, doc, folder or agent kept at the top of a feed ----------
 // Pins belong to the feed (ws.chatPins for #general), so everyone in it sees them. What each one is, though, is
 // worked out for each reader: a pin to something they can't open is a locked chip with no name or id.
-const CHAT_PIN_KINDS = ['stack', 'doc', 'dir', 'agent'];
+const CHAT_PIN_KINDS = ['stack', 'doc', 'dir', 'agent', 'job'];
 const CHAT_PINS = 8;
 // True or false: whether this person can open what the pin points at. Null: it's gone, for everyone.
 function chatPinSees(ws, p, memberId) {
-  if (p.kind === 'stack') { const st = ws.stacks.find((x) => x.id === p.id); return st ? seesCampaign(st.campaignId, memberId) : null; }
+  if (p.kind === 'stack') { const st = ws.stacks.find((x) => x.id === p.id); return st ? seesStack(st, memberId) : null; }
+  if (p.kind === 'job') { const rec = db.records[p.id]; return rec && rec.wsId === ws.id && JF.isJobRecord(rec) ? !!PJ.recordAt(rec.id, ws.id, memberId) : null; }
   if (p.kind === 'dir') return ws.dirs.some((d) => d.id === p.id) ? seesDir(ws, p.id, memberId) : null;
   if (p.kind === 'doc') { const it = db.items[p.id]; return it && it.wsId === ws.id && it.type === 'text' ? canSee({ memberId, wsId: ws.id }, 'item', it) : null; }
   if (p.kind === 'agent') return Object.hasOwn(AGENTS, p.id) ? true : null;
@@ -2619,6 +2652,7 @@ function chatPinLabel(ws, p) {
   if (p.kind === 'stack') return { label: ws.stacks.find((x) => x.id === p.id)?.name || 'Stack' };
   if (p.kind === 'dir') return { label: ws.dirs.find((d) => d.id === p.id)?.name || 'Folder' };
   if (p.kind === 'doc') { const it = db.items[p.id]; return { label: it.title || docOf(it).title || 'Untitled', icon: it.icon || undefined }; }
+  if (p.kind === 'job') return JF.pinInfo(db.records[p.id]);
   return { label: AGENTS[p.id].name, icon: AGENTS[p.id].icon };
 }
 function publicChatPins(ws, pins, memberId) {
@@ -2735,7 +2769,7 @@ function startList(ws, auth) {
   const recs = (tpl) => Object.values(db.records).some((r) => r.wsId === ws.id && db.projects[r.projectId]?.template === tpl);
   const first = tools.projects && setup.kind === 'trades' ? ['job', recs('trades') || recs('jobs')]
     : tools.projects && setup.kind === 'software' ? ['work', recs('tech')]
-    : ['campaign', Object.values(db.campaigns).some((c) => c.wsId === ws.id)];
+    : ['campaign', Object.values(db.campaigns).some((c) => c.wsId === ws.id && !isJobRun(c))];
   const items = [
     ['hq', hq],
     (tools.sidekick || tools.agents) && ['ai', ai],
@@ -2833,17 +2867,29 @@ function broadcast(wsId, msg) {
     return;
   }
   const campaignId = campaignOfMsg(msg);
+  if ((msg.type === 'campaign' || msg.type === 'goal' || msg.type === 'nextup') && isJobRun(db.campaigns[campaignId])) return;
   // An item that just went into someone's private folder disappears for everyone else.
   const hide = (msg.type === 'item:add' || msg.type === 'item:update') && JSON.stringify({ type: 'item:remove', id: msg.item.id });
   const feed = msg.item && db.items[msg.item.id] ? feedOfItem(db.items[msg.item.id]) : null;
   const inDir = msg.item && db.items[msg.item.id];
-  const data = JSON.stringify(msg);
+  let data = JSON.stringify(msg);
+  // Prices (docs/jobflows/PRICES.md): what goes out carries none; owners and admins get a priced copy: msg.priced's
+  // keys added, or a record rendered again with its prices.
+  let pricedData = null;
+  if (msg.priced) {
+    const { priced, ...base } = msg;
+    data = JSON.stringify(base);
+    pricedData = JSON.stringify({ ...base, ...priced });
+  } else if (msg.type === 'record' && msg.record?.id && db.records[msg.record.id]) {
+    const { hiddenFields, ...rest } = msg.record;
+    pricedData = JSON.stringify({ ...msg, record: { ...rest, ...PJ.publicRecord(db.records[msg.record.id], PJ.FULL) } });
+  }
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
   const task = msg.task?.id && db.tasks[msg.task.id];
   const sees = (mid) => seesCampaign(campaignId, mid) && seesFeed(feed, mid) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
   const live = (s) => s.readyState === 1 && (!s.meta.token || db.tokens[s.meta.token]) && db.workspaces[wsId]?.members.some((x) => x.id === s.meta.memberId);
   for (const s of set) if (!live(s) && s.readyState === 1) s.close(4001, 'Signed out');
-  for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(data);
+  for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(pricedData && PJ.seesPrices(wsId, s.meta.memberId) ? pricedData : data);
   try {
     alertsFor(wsId, msg, sees);
   } catch (e) {
@@ -2858,6 +2904,7 @@ const METHODS = ['Call', 'Email'];
 const labelList = (v, max) => [...new Set((Array.isArray(v) ? v : []).map((o) => String(o).trim().slice(0, 40)).filter(Boolean))].slice(0, max);
 function seesCampaign(campaignId, memberId) {
   const c = campaignId && db.campaigns[campaignId];
+  if (isJobRun(c)) return !!PJ.recordAt(c.recordId, c.wsId, memberId); // a Job Flow run: whoever sees its job
   const cast = !!c && castOf(c).some((r) => r.memberIds.includes(memberId));
   if (c && ownOnly(c.wsId, memberId)) return c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || cast || taskCamps(c.wsId, memberId).has(c.id);
   return !c || !c.private || c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || cast;
@@ -2886,10 +2933,11 @@ function taskCamps(wsId, memberId) {
 }
 function seesOwn(kind, x, memberId) {
   if (!x || !ownOnly(x.wsId, memberId)) return true;
-  if (kind === 'task') return !!campaignOf('task', x) || myTask(x, memberId);
+  // A Job Flow step's task counts as the job's task, not a campaign's: theirs only (CONTRACTS.md §3.1).
+  if (kind === 'task') { const cid = campaignOf('task', x); return (!!cid && !isJobRun(db.campaigns[cid])) || myTask(x, memberId); }
   if (kind === 'item') {
     const top = topItem(x);
-    return !!campaignOf('item', x) || !!top.channelId || top.type === 'message' || top.memberId === memberId;
+    return !!campaignOf('item', x) || !!jobStackOfItem(x) || !!top.channelId || top.type === 'message' || top.memberId === memberId;
   }
   if (kind === 'template') return x.ownerId === memberId;
   return true;
@@ -2915,7 +2963,7 @@ function campaignOf(kind, x) {
 }
 // Each person's Day is their own: entries, and the calendar events pulled into them, are seen only by them.
 const seesEntry = (e, memberId) => !e || e.memberId === memberId;
-const canSee = (auth, kind, x) => seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
+const canSee = (auth, kind, x) => !((kind === 'campaign' || kind === 'goal') && isJobRun(db.campaigns[campaignOf(kind, x)])) && seesCampaign(campaignOf(kind, x), auth.memberId) && (kind !== 'item' || (seesFeed(feedOfItem(x), auth.memberId) && seesItemDir(x, auth.memberId) && (!jobStackOfItem(x) || seesStack(jobStackOfItem(x), auth.memberId)))) && (kind !== 'entry' || seesEntry(x, auth.memberId)) && seesOwn(kind, x, auth.memberId);
 function campaignOfMsg(msg) {
   if (msg.item) return campaignOf('item', db.items[msg.item.id]);
   if (msg.task) return campaignOf('task', msg.task);
@@ -2958,6 +3006,8 @@ const subsOf = (c) => Object.values(db.campaigns).filter((x) => x.parentId === c
 const castOf = (c) => c?.cast || [];
 const castRole = (c, id) => (id ? castOf(c).find((r) => r.id === id) : null);
 const taskCamp = (t) => db.campaigns[db.goals[t?.goalId]?.campaignId] || null;
+// The campaign a task is shown under: never a Job Flow run (a run's tasks are the job's tasks, CONTRACTS.md §4).
+const taskCampaign = (t) => { const c = taskCamp(t); return c && !isJobRun(c) ? c : null; };
 // ----- A campaign's test run (the sandbox, 2026-11-20) -----
 // Run a campaign for real before it goes to the team: its tasks go only to the testers (each person, team role or
 // campaign role on a task is matched to a tester, the same one every time), only testers are told anything about it,
@@ -3126,7 +3176,7 @@ function applyCampaign(c, body, ws, auth) {
   // Part of a bigger campaign: its progress counts toward the main one's. One level: a sub has no subs of its own.
   if (body.parentId !== undefined) {
     const p = body.parentId && db.campaigns[body.parentId];
-    if (body.parentId && (!p || p.wsId !== ws.id)) throw badRequest('That campaign is gone.');
+    if (body.parentId && (!p || p.wsId !== ws.id || isJobRun(p))) throw badRequest('That campaign is gone.');
     if (p?.id === c.id) throw badRequest('A campaign can’t be part of itself.');
     if (p?.parentId) throw badRequest(`“${p.name}” is itself part of another campaign. Pick the main one.`);
     if (p && subsOf(c).length) throw badRequest('This campaign has sub-campaigns of its own, so it can’t go under another one.');
@@ -3192,6 +3242,7 @@ const tasksInOrder = (g) => Object.values(db.tasks).filter((t) => t.goalId === g
   .sort(placed((a, b) => ((a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : a.createdAt - b.createdAt)));
 function goalMet(g) {
   if (g.skipped) return true;
+  if (g.kind === 'step') return JF.stepMet(g); // a Job Flow step: what it stands for, its tasks, its needs
   if (g.kind === 'count') {
     const n = Object.values(db.attempts).filter((x) => x.campaignId === g.campaignId && (!g.counts?.length || g.counts.includes(x.outcome)) && (!g.methods?.length || g.methods.includes(x.method))).length;
     return n >= g.target;
@@ -3322,7 +3373,7 @@ function openings(ws, tz) {
         broadcast(ws.id, { type: 'task', task: publicTask(t) });
         broadcast(ws.id, { type: 'handoff', task: publicTask(t), by, byId });
         // Automations can start here: "when a task in this step opens, tell whoever it's for" (2026-11-20).
-        setImmediate(() => db.tasks[t.id] && !db.tasks[t.id].done && automate(ws.id, 'task.opened', { task: db.tasks[t.id], campaign: taskCamp(t), who: by, whoId: byId, private: privateTask(t) }));
+        setImmediate(() => db.tasks[t.id] && !db.tasks[t.id].done && automate(ws.id, 'task.opened', { task: db.tasks[t.id], campaign: taskCampaign(t), who: by, whoId: byId, private: privateTask(t) }));
       } else broadcast(ws.id, { type: 'task', task: publicTask(t) });
     }
     if (changed) save();
@@ -3362,7 +3413,7 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
     if (t.signoff) Object.assign(t, { submitted: { by: by || 'Kloomie', byId: byId || null, at: Date.now() }, returned: null });
     else {
       Object.assign(t, { done: true, doneAt: Date.now(), doneBy: by || 'Kloomie', submitted: null, returned: null });
-      setImmediate(() => automate(t.wsId, 'task.done', { task: t, campaign: taskCamp(t), who: by, whoId: byId, private: privateTask(t) }));
+      setImmediate(() => automate(t.wsId, 'task.done', { task: t, campaign: taskCampaign(t), who: by, whoId: byId, private: privateTask(t) }));
     }
     // Done by its tool, as whoever used it (or Kloomie, when nobody did).
     noteWork(t, was, { by: byId || null, via: 'tool' });
@@ -3378,7 +3429,7 @@ function toolDone(taskId, { by, byId, note, file } = {}) {
 const listWorked = (l) => l.rows.length > 0 && l.rows.every((r) => Object.values(db.attempts).some((x) => x.listId === l.id && x.rowId === r.id));
 
 const HEALTH = ['onTrack', 'atRisk', 'offTrack'];
-const HANDOFF_ROUTES = new Set(['tasks', 'goals', 'attempts', 'campaigns', 'templates', 'sidekick']);
+const HANDOFF_ROUTES = new Set(['tasks', 'goals', 'attempts', 'campaigns', 'templates', 'sidekick', 'jobs']);
 
 // ----- follow-ups: a logged call or email that comes back as a task a few days later -----
 // Unless a campaign says otherwise, no answer comes back in 2 days and interest in 3.
@@ -3502,6 +3553,7 @@ function deleteTask(t) {
   }
 }
 function deleteCampaign(ws, c) {
+  JF.campaignGone(c); // a Job Flow's Campaign step made it: the step is open again (PHASE4.md §3)
   // What came after it now stands on its own.
   for (const x of Object.values(db.campaigns)) if (x.follows === c.id) {
     x.follows = null;
@@ -3527,7 +3579,7 @@ function deleteCampaign(ws, c) {
 // A campaign gets its own feed (in a "Campaigns" chat folder) and its own stack for files.
 // owner: { memberId, member } of whoever it belongs to. extra: fields set before anyone hears about it.
 function createCampaign(ws, owner, body, extra = {}) {
-  const c = applyCampaign({ id: rid(), wsId: ws.id, ownerId: owner.memberId, by: owner.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], assigneeId: null, outcomes: [...OUTCOMES], methods: [...METHODS], lastReportAt: null }, body, ws, owner);
+  const c = applyCampaign({ id: extra.id || rid(), wsId: ws.id, ownerId: owner.memberId, by: owner.member, createdAt: Date.now(), name: '', brief: '', start: null, end: null, color: 'violet', status: 'active', private: false, memberIds: [], assigneeId: null, outcomes: [...OUTCOMES], methods: [...METHODS], lastReportAt: null }, body, ws, owner);
   let folder = ws.chatFolders.find((f) => f.campaigns);
   if (!folder) ws.chatFolders.push((folder = { id: rid(8), name: 'Campaigns', campaigns: true }));
   const ch = { id: rid(8), name: freeChannelName(ws, c.name), folderId: folder.id, campaignId: c.id };
@@ -3663,6 +3715,21 @@ function applyTemplate(t, body, ws) {
 // Makes a new campaign from a saved one. date: its start day; time: set for scheduled runs.
 // cast: who plays each of the main campaign's roles this time ({ roleId: [memberIds] }); otherwise the saved crew.
 // recordId: the job it's for (2026-11-17), when whoever starts it (or the owner, for a scheduled run) can see it.
+// A Job Flow's Campaign step (PHASE4.md §3): a campaign from the saved campaign copied into the flow's version, with
+// the id the step chose, linked to the job, in the run owner's name. Synchronous: the step's marker is written in the
+// same turn (§5.1).
+function campaignFromSnapshot(ws, ownerId, snap, { id, name, recordId }) {
+  const ownerM = ws.members.find((m) => m.id === ownerId) || ws.members.find((m) => m.role === 'owner');
+  const owner = { memberId: ownerM.id, member: ownerM.name };
+  const k = snap.campaign || {};
+  const date = dayIn(tzOf(ws));
+  const c = createCampaign(ws, owner, {
+    name, brief: k.brief, audience: k.audience || '', strategy: k.strategy || '', color: k.color, outcomes: k.outcomes, methods: k.methods, private: k.private, memberIds: k.memberIds, inOrder: !!k.inOrder,
+    cast: k.cast || [], start: date, end: k.days != null ? addDays(date, k.days) : null, recordId, ...(k.followUps ? { followUps: k.followUps } : {}),
+  }, { id, templateId: snap.id || null, assignedBy: null, assigneeId: snap.assigneeId || null, recordId });
+  fillCampaign(ws, owner, c, snap, date, null);
+  return c;
+}
 function runTemplate(tpl, { date, time, by, cast, recordId }) {
   const ws = db.workspaces[tpl.wsId];
   const ownerM = ws.members.find((m) => m.id === tpl.ownerId) || ws.members.find((m) => m.role === 'owner');
@@ -3894,7 +3961,10 @@ function cleanAction(a, ws, who) {
     if (!p || p.wsId !== ws.id || !PJ.sees(p, who)) throw badRequest('That project is gone, or you can’t see it.');
     const lt = typeOfP(p, a.typeId);
     if (!lt) throw badRequest('Pick which list.');
-    return { kind, projectId: p.id, typeId: lt.id, set: PJ.autoSetClean(ws, lt, a.set) };
+    const set = PJ.autoSetClean(ws, lt, a.set);
+    const priced = set.map((x) => lt.fields.find((f) => f.id === x.field)).find((f) => f && PJ.isPriced(p, lt, f));
+    if (priced && !PJ.seesPrices(ws.id, who)) throw badRequest(`Only owners and admins can have an automation set ${priced.name}: prices are for owners and admins.`);
+    return { kind, projectId: p.id, typeId: lt.id, set };
   }
   // The rest of the tools: its maker has to be allowed to do it (and is checked again when it runs, by the same routes).
   if (['invoice', 'text', 'email'].includes(kind) && !isAdminId(ws.id, who)) throw badRequest('Only owners and admins can have an automation bill or message customers.');
@@ -4077,8 +4147,9 @@ const stageAt = (f, label) => f.choices.findIndex((c) => c.label.toLowerCase() =
 const stepFinished = (g) => g.skipped || (g.kind === 'tasks' ? tasksInOrder(g).length > 0 && goalMet(g) : goalMet(g));
 function openStepsUpTo(rec, f, to) {
   const out = [];
+  const run = JF.activeRun(rec.id); // a job on a Job Flow: only its run holds its stage (CONTRACTS.md §1.5)
   for (const c of Object.values(db.campaigns)) {
-    if (c.recordId !== rec.id) continue;
+    if (c.recordId !== rec.id || (run ? c !== run : isJobRun(c))) continue;
     for (const g of goalsInOrder(c)) { const i = g.stage ? stageAt(f, g.stage) : -1; if (i >= 0 && i <= to && !goalMet(g)) out.push(g); }
   }
   return out;
@@ -4129,6 +4200,11 @@ function jobSteps(wsId, by, byId) {
   stepsBusy++; busyFlowing = flowing;
   try {
     jobStepsOnce(wsId, by, byId);
+    // A Job Flow's automatic Invoice step that has come up makes and sends its invoice (PHASE2.md §1.4); the steps
+    // are looked at again so the answer shows it.
+    if (stepsBusy === 1 && JF.autoBill(wsId)) jobStepsOnce(wsId, by, byId);
+    // Phase 4: what's kept the first time a step is met (a check-in's round end, stock used, a campaign made).
+    if (stepsBusy === 1 && JF.linksSweep(wsId)) jobStepsOnce(wsId, by, byId);
     for (let i = 0; i < 5 && stepsAgain && stepsBusy === 1; i++) { stepsAgain = false; jobStepsOnce(wsId, 'Kloomie', null); }
   } catch (e) { alarm('Checking job steps failed', e); }
   finally { stepsBusy--; busyFlowing = was; }
@@ -4146,7 +4222,7 @@ function jobStepsOnce(wsId, by, byId) {
   // Each step's finished-or-not, kept (g.finished), so "a step is finished" goes off once, when it becomes so. One
   // pass over the team's steps and tasks. A step seen for the first time is only noted.
   const camps = new Map(), tasksOf = new Map();
-  for (const g of Object.values(db.goals)) { const c = db.campaigns[g.campaignId]; if (c?.wsId === wsId) { if (!camps.has(c.id)) camps.set(c.id, []); camps.get(c.id).push(g); } }
+  for (const g of Object.values(db.goals)) { const c = db.campaigns[g.campaignId]; if (c?.wsId === wsId && !(isJobRun(c) && c.status === 'cancelled')) { if (!camps.has(c.id)) camps.set(c.id, []); camps.get(c.id).push(g); } }
   for (const t of Object.values(db.tasks)) if (t.wsId === wsId && t.goalId) { if (!tasksOf.has(t.goalId)) tasksOf.set(t.goalId, []); tasksOf.get(t.goalId).push(t); }
   for (const [cid, gs] of camps) for (const g of gs) {
     const ts = tasksOf.get(g.id) || [];
@@ -4157,7 +4233,8 @@ function jobStepsOnce(wsId, by, byId) {
       const key = needsOf(g).map((n) => (n.met ? 1 : 0) + ':' + (n.have ?? '')).join(',');
       if (key !== g.needKey) { g.needKey = key; changed = true; broadcast(wsId, { type: 'goal', goal: publicGoal(g) }); }
     }
-    const m = !!(g.skipped || (g.kind === 'count' ? goalMet(g) : (g.kind !== 'tasks' || ts.length > 0) && ts.every(stepDone) && needsMet(g)));
+    // A Job Flow step is finished by what it stands for (goalMet → JF.stepMet), not only by its tasks (CONTRACTS.md §1.5).
+    const m = !!(g.kind === 'step' ? goalMet(g) : g.skipped || (g.kind === 'count' ? goalMet(g) : (g.kind !== 'tasks' || ts.length > 0) && ts.every(stepDone) && needsMet(g)));
     // The work history (2026-11-19): work on a step started when its first task was done.
     if (!g.startedAt) { const first = ts.reduce((n, x) => (x.done && x.doneAt && (!n || x.doneAt < n) ? x.doneAt : n), 0); if (first) { g.startedAt = first; changed = true; } }
     if (g.finished === undefined) { g.finished = m; changed = true; continue; }
@@ -4166,17 +4243,26 @@ function jobStepsOnce(wsId, by, byId) {
     changed = true;
     if (m) Object.assign(g, { finishedAt: Date.now(), finishedById: byId || actorNow().by || null });
     else Object.assign(g, { finishedAt: null, finishedById: null, reopens: (g.reopens || 0) + 1 });
-    if (m) automate(wsId, 'step.done', { goal: g, campaign: db.campaigns[cid], who: by, whoId: byId });
+    const camp = db.campaigns[cid];
+    // A run's step: once per completion cycle (goalId:reopens), with the cycle, so an automation can run only the first time.
+    const run = isJobRun(camp) ? { run: true, flowId: camp.flowId, cycle: (g.reopens || 0) + 1, again: (g.reopens || 0) > 0 } : {};
+    if (m) automate(wsId, 'step.done', { goal: g, campaign: camp, who: by, whoId: byId, ...run });
+    if (isJobRun(camp)) JF.tell(camp);
   }
   for (const c of Object.values(db.campaigns)) {
-    if (c.wsId !== wsId || !c.recordId) continue;
+    if (c.wsId !== wsId || !c.recordId || (isJobRun(c) && c.status === 'cancelled')) continue;
     const rec = db.records[c.recordId];
     if (!rec) continue;
     const p = db.projects[rec.projectId];
-    const f = stageFieldOf(p && typeOfP(p, rec.typeId));
+    // Who moves the job's stage: its going Job Flow run alone, else its ordinary campaigns as before (CONTRACTS.md §1.5).
+    const run = JF.activeRun(rec.id);
+    const owns = run ? c === run : !isJobRun(c);
+    const f = owns ? stageFieldOf(p && typeOfP(p, rec.typeId)) : null;
     const goals = goalsInOrder(c);
     let fresh = null;
-    for (const g of goals) {
+    // Only a campaign that owns the stage keeps track of the stages it has moved (g.staged): one held back while a run
+    // owns the stage still has its done goals to move the job when the run is cancelled or finishes.
+    if (f) for (const g of goals) {
       const m = stepFinished(g);
       if (m && g.stage && !g.staged) { g.staged = true; fresh ||= g; changed = true; }
       else if (!m && g.staged) { g.staged = false; changed = true; }
@@ -4184,7 +4270,7 @@ function jobStepsOnce(wsId, by, byId) {
     if (fresh && f) {
       const at = f.choices.findIndex((x) => x.id === rec.values[f.id]);
       let to = -1;
-      for (const x of Object.values(db.campaigns)) if (x.recordId === rec.id) for (const g of goalsInOrder(x)) {
+      for (const x of run ? [run] : Object.values(db.campaigns).filter((y) => y.recordId === rec.id && !isJobRun(y))) for (const g of goalsInOrder(x)) {
         const i = g.stage && stepFinished(g) ? stageAt(f, g.stage) : -1;
         if (i > to && !openStepsUpTo(rec, f, i).length) to = i;
       }
@@ -4200,13 +4286,21 @@ function jobStepsOnce(wsId, by, byId) {
     if (all && c.status === 'active') {
       Object.assign(c, { status: 'done', doneBySteps: true });
       changed = true;
+      if (isJobRun(c)) {
+        // A run finishing is its own event; campaign automations never see runs (CONTRACTS.md §2.3).
+        const lt = p && typeOfP(p, rec.typeId);
+        automate(wsId, 'job.flow.done', { record: rec, project: p, list: lt, recordName: String(rec.values[lt?.primary] ?? ''), flowName: c.flowName, who: by, whoId: byId, private: !!p?.private });
+        JF.tell(c);
+        continue;
+      }
       broadcast(wsId, { type: 'campaign', campaign: publicCampaign(c) });
       automate(wsId, 'campaign.done', { campaign: c, who: by, whoId: byId });
       for (const n of Object.values(db.campaigns)) if (n.follows === c.id && n.status !== 'done') broadcast(wsId, { type: 'nextup', campaign: publicCampaign(n), after: c.name, by });
     } else if (!all && c.status === 'done' && c.doneBySteps) {
       Object.assign(c, { status: 'active', doneBySteps: false });
       changed = true;
-      broadcast(wsId, { type: 'campaign', campaign: publicCampaign(c) });
+      if (isJobRun(c)) JF.tell(c);
+      else broadcast(wsId, { type: 'campaign', campaign: publicCampaign(c) });
     }
   }
   if (changed) save();
@@ -4244,7 +4338,7 @@ function eventFromHook(wsId, type, d, by) {
   const at = rec ? { record: rec, project: p, list: lt, recordName: lt ? String(rec.values[lt.primary] ?? '') : '' } : {};
   if (type.startsWith('visit.')) return automate(wsId, type, { ...at, recordName: d.job || at.recordName, date: d.date, time: d.start || '', crew: (d.crew || []).map((m) => m.name).join(', '), who: by, private: privateRecord(d.job_id) });
   if (type === 'text.received') return automate(wsId, type, { contact: db.contacts[d.contact_id] || { name: d.contact_name || d.from }, phone: d.from, text: clipText(d.body, 300), who: 'Text message' });
-  if (type === 'task.created') { const t = db.tasks[d.id]; return t && automate(wsId, type, { task: t, campaign: taskCamp(t), who: by, whoId: t.memberId, private: privateTask(t) }); }
+  if (type === 'task.created') { const t = db.tasks[d.id]; return t && automate(wsId, type, { task: t, campaign: taskCampaign(t), who: by, whoId: t.memberId, private: privateTask(t) }); }
   if (type.startsWith('invoice.') || type === 'payment.received') {
     const inv = d.invoice_id ? db.invoices?.[d.invoice_id] : null;
     return automate(wsId, type, { ...at, invoice: d.number || d.invoice_number, customer: d.customer?.name || inv?.to?.name || '', amount: type === 'payment.received' ? d.payment?.amount : d.total, who: by, private: privateRecord(d.job_id) });
@@ -4820,6 +4914,9 @@ async function autoAction(x, a, ctx) {
     if (!memberIn(ws.id, x.memberId) || !PJ.sees(p, x.memberId)) throw new Error(`its maker can’t see ${p.name} any more`);
     const fill = (text) => autoFill(text, ctx, ws.id);
     const src = ctx.record?.id && db.records[ctx.record.id];
+    // Prices (docs/jobflows/PRICES.md §8): the automation acts as its maker, checked now, whoever's change started it.
+    const priced = (a.set || []).map((x) => lt.fields.find((f) => f.id === x.field)).find((f) => f && PJ.isPriced(p, lt, f));
+    if (priced && !PJ.seesPrices(ws.id, x.memberId)) throw new Error(`${ws.members.find((m) => m.id === x.memberId)?.name || 'Its maker'} can’t set ${priced.name}: prices are for owners and admins.`);
     if (a.kind === 'record') {
       if (!src || src.projectId !== p.id || src.typeId !== lt.id) return `Nothing to change: it wasn’t about ${(lt.singular || 'a record').toLowerCase()} in ${p.name}`;
       PJ.autoUpdate(ws, p, lt, src, PJ.autoSetValues(ws, lt, a.set, fill, ctx.whoId), { name: x.name, memberId: x.memberId });
@@ -5955,26 +6052,130 @@ const memberReply = (ws, memberId) => { const u = userOf(memberById(ws, memberId
 // What a text would say, and where to: the app opens it in the person's Messages app.
 const smsOf = (c, body) => ({ phone: String(c?.phone || '').replace(/[^\d+]/g, ''), body });
 // One message to a customer: emailed when they have an address (and email works here), and a text to send.
+// It also says why nothing went: `blocked` (stopped before the provider: the daily cap, the team's unconfirmed email,
+// email off; nothing left Kloomie) or `failed` (the provider or Twilio was called and failed: it may have gone).
+// Test only (outside production): JOBFLOWS_MAIL_THROW makes the provider call fail.
+const MAIL_THROW = process.env.NODE_ENV !== 'production' && process.env.JOBFLOWS_MAIL_THROW === '1';
 async function tellCustomer(ws, rec, c, { tag, subject, heading, lines, button, text, replyTo, by, what }) {
-  let emailed = false;
+  let emailed = false, blocked = null, failed = null;
   const held = emailable(c) && mailer.mode !== 'off' ? platformSendBlock(ws) : null;
-  if (held) console.error('Customer email held:', ws.id, held);
+  if (held) { console.error('Customer email held:', ws.id, held); blocked = held; }
+  if (emailable(c) && mailer.mode === 'off') blocked = 'Email isn’t set up on this server.';
   if (emailable(c) && mailer.mode !== 'off' && !held) {
-    emailed = await mailer.customerEmail(c.email, { team: ws.name, replyTo, subject, heading, lines, button, tag }).then(() => true, (e) => (console.error('Customer email failed:', e.message), false));
+    emailed = await (MAIL_THROW ? Promise.reject(new Error('Test: the email provider failed')) : mailer.customerEmail(c.email, { team: ws.name, replyTo, subject, heading, lines, button, tag }))
+      .then(() => true, (e) => { console.error('Customer email failed:', e.message); failed = e.message || 'The email provider failed'; return false; });
   }
   if (emailed) PJ.recordActivity(rec.id, { kind: 'email', what, note: `Emailed ${c.email}`, by });
-  const texted = await twilioText(ws, rec, c, text, by, what);
-  return { emailed, texted, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: !texted && c && !noContact(c) && c.phone ? smsOf(c, text) : null };
+  let texted = false;
+  if (textable(c)) texted = await TW.sendText(ws.id, c, text, by, { recordId: rec?.id, what }).then(() => { if (rec) PJ.recordActivity(rec.id, { kind: 'text', what, note: `Texted ${c.phone}`, by }); return true; }, (e) => { console.error('Customer text failed:', e.message); failed ||= e.message || 'The text failed'; return false; });
+  return { emailed, texted, blocked, failed, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: !texted && c && !noContact(c) && c.phone ? smsOf(c, text) : null };
 }
+// ---------- Job Flows' customer messages (docs/jobflows/PHASE3.md) ----------
+// Who can't be reached at all (a step for them is skipped by Kloomie): no client, do not contact, or no email address
+// and no phone the team's Twilio can text. The phone's Messages app never counts for an automatic message.
+function flowReach(c) {
+  if (!c) return 'No client on the job';
+  if (noContact(c)) return `${c.name || 'The customer'} is marked do not contact`;
+  if (!emailable(c) && !textable(c)) return `${c.name || 'The customer'} has no email or text number`;
+  return null;
+}
+// One message: sent (by email and/or text), blocked (nothing left Kloomie: try again later), or unsure (it may have gone).
+async function flowTell(ws, rec, c, msg, by) {
+  const out = await tellCustomer(ws, rec, c, { ...msg, by });
+  if (out.emailed || out.texted) return { outcome: 'sent', via: out.emailed && out.texted ? 'both' : out.emailed ? 'email' : 'text' };
+  if (out.failed) return { outcome: 'unsure', reason: String(out.failed).slice(0, 200) };
+  return { outcome: 'blocked', reason: out.blocked || 'Nothing could be sent.' };
+}
+// ---------- Nothing goes to a customer without an OK (docs/jobflows/PHASE3B.md §1) ----------
+// Every send a person starts is two calls: the first answers 428 with what would go and a one-time ticket; the second,
+// with that ticket, sends. A ticket is bound to the team, the person, the route, the target and the exact message
+// (its digest); it lasts 10 minutes and works once. Checking it, marking it used and handing the message to the sender
+// happen in one synchronous turn, so two confirmations can't both send. A person's OK already given elsewhere (an
+// agent's draft they accepted, an automation the Flows hold let through) needs no ticket.
+const TICKET_TEST = process.env.NODE_ENV !== 'production';
+const TICKET_MS = (TICKET_TEST && Number(process.env.SEND_TICKET_MS)) || 10 * 60_000;
+const TICKET_KEEP_MS = (TICKET_TEST && Number(process.env.SEND_TICKET_KEEP_MS)) || 86_400_000;
+const TICKETS_OPEN_MAX = 200;
+const viaOf = (c, email = true) => { const e = email && emailable(c), t = textable(c); return e && t ? 'both' : e ? 'email' : t ? 'text' : null; };
+// What a message would be, as a person sees it before saying Send. Members never see a customer's email; the phone
+// only where their screen already shows it (On my way).
+function custPreview(c, msg, { admin = false, phone = admin, email = true } = {}) {
+  const via = viaOf(c, email);
+  const body = [...(msg.lines || []), msg.button ? `${msg.button.label}: ${msg.button.url}` : ''].filter(Boolean).join('\n');
+  return {
+    to: c?.name || 'the customer', via,
+    ...(admin && via && via !== 'text' ? { email: c.email } : {}),
+    ...(phone && textable(c) ? { phone: c.phone } : {}),
+    ...(via && via !== 'text' && msg.subject ? { subject: msg.subject } : {}),
+    text: via === 'text' ? msg.text : body,
+    ...(via === 'both' ? { textMessage: msg.text } : {}),
+  };
+}
+const custDigest = (c, msg, email = true) => crypto.createHash('sha256').update(JSON.stringify([viaOf(c, email), email && emailable(c) ? c.email : null, textable(c) ? TW.e164(c.phone) : null, msg.subject || '', msg.lines || [], msg.button || null, msg.text || ''])).digest('hex');
+function trimTickets(wsId) {
+  db.sendTickets ||= {};
+  const now = Date.now();
+  for (const [id, x] of Object.entries(db.sendTickets)) if (now - x.at > TICKET_KEEP_MS) delete db.sendTickets[id];
+  const open = Object.entries(db.sendTickets).filter(([, x]) => x.wsId === wsId && !x.used).sort((a, b) => a[1].at - b[1].at);
+  while (open.length >= TICKETS_OPEN_MAX) delete db.sendTickets[open.shift()[0]];
+}
+// null: go ahead and send (the ticket is now used). Otherwise { status, body } to answer with.
+function sendGate(ws, auth, route, target, preview, digest, confirm) {
+  if (auth.personOk || auth.flow || auth.approved) return null; // a person already said yes (an accepted agent draft, an approved hold, the Flows hold)
+  db.sendTickets ||= {};
+  const fresh = () => {
+    trimTickets(ws.id);
+    const id = crypto.randomBytes(18).toString('base64url');
+    db.sendTickets[id] = { wsId: ws.id, memberId: auth.memberId, route, target: String(target), digest, at: Date.now(), used: null, agent: !!auth.agent };
+    save();
+    return { preview, confirm: id };
+  };
+  if (!confirm) return { status: 428, body: fresh() };
+  if (auth.agent) return { status: 403, body: { error: 'An agent can’t confirm a message to a customer. The person has to.' } };
+  const x = typeof confirm === 'string' && Object.hasOwn(db.sendTickets, confirm) ? db.sendTickets[confirm] : null;
+  const mine = x && x.wsId === ws.id && x.memberId === auth.memberId && x.route === route && x.target === String(target) && !x.agent;
+  if (mine && x.used) return { status: 409, body: { sent: true, error: 'That already went.' } };
+  if (!mine || Date.now() - x.at > TICKET_MS || x.digest !== digest) return { status: 409, body: { error: 'Look at it again before sending.', ...fresh() } };
+  x.used = Date.now();
+  save();
+  return null;
+}
+const money$ = (c) => ((c || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+// The fixed wording of each message (no free text from a step reaches a customer in Phase 3).
+const flowMsg = {
+  remind: (ws, rec, c, v) => ({ tag: 'visit-reminder', subject: `Reminder: ${ws.name} is coming ${v.date === dayIn(tzOf(ws), Date.now() + 864e5) ? 'tomorrow' : longDay(v.date)}`, heading: `See you ${longDay(v.date)}`,
+    lines: [`Hi ${firstName(c)},`, `This is a reminder that ${ws.name} is coming ${longDay(v.date)} ${visitTime(v)} for your ${String(v.kind || 'visit').toLowerCase()}.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : '', 'Need to change it? Just reply to this email.'].filter(Boolean),
+    text: reminderText(ws, c, v, rec), replyTo: ownerReply(ws), what: 'visit reminder sent' }),
+  review: (ws, rec, c, url) => ({ tag: 'review-request', subject: `Thanks from ${ws.name}`, heading: `Thank you, ${firstName(c)}!`,
+    lines: [`Thanks for choosing ${ws.name}. We hope you're happy with the work.`, 'If you have a minute, a quick review helps a small business like ours more than anything.'],
+    button: { label: 'Leave a review', url }, text: reviewText(ws, c, url), replyTo: ownerReply(ws), what: 'review request sent' }),
+  quote: (ws, rec, c, url, total) => ({ tag: 'quote-sent', subject: `Your quote from ${ws.name}`, heading: `Your quote, ${firstName(c)}`,
+    lines: [`Hi ${firstName(c)},`, `Here's your quote from ${ws.name}${total ? ` for ${money$(total)}` : ''}. You can look it over and accept it online.`], button: { label: 'See the quote', url },
+    text: `Hi ${firstName(c)}, here's your quote from ${ws.name}: ${url}`, replyTo: ownerReply(ws), what: 'quote emailed' }),
+  quoteFollow: (ws, rec, c, url) => ({ tag: 'quote-follow-up', subject: `Any questions about your quote from ${ws.name}?`, heading: 'Just checking in',
+    lines: [`Hi ${firstName(c)},`, `We wanted to check whether you had any questions about the quote from ${ws.name}. It's ready for you whenever you are.`], button: { label: 'See the quote', url },
+    text: `Hi ${firstName(c)}, just checking in on your quote from ${ws.name}: ${url}`, replyTo: ownerReply(ws), what: 'quote follow-up sent' }),
+  invoice: (ws, rec, c, inv, url, total) => ({ tag: 'invoice', subject: `Invoice ${inv.number} from ${ws.name}`, heading: `Invoice ${inv.number}`,
+    lines: [`Hi ${firstName(c)},`, `Here's your invoice from ${ws.name} for ${money$(total)}${inv.due ? `, due ${longDay(inv.due)}` : ''}.`], button: { label: 'See and pay it', url },
+    text: `Hi ${firstName(c)}, here's your invoice ${inv.number} from ${ws.name} for ${money$(total)}: ${url}`, replyTo: ownerReply(ws), what: 'invoice emailed' }),
+  payReminder: (ws, rec, c, inv, url, balance) => ({ tag: 'payment-reminder', subject: `A reminder about invoice ${inv.number}`, heading: 'A friendly reminder',
+    lines: [`Hi ${firstName(c)},`, `This is a reminder that invoice ${inv.number} from ${ws.name} for ${money$(balance)} was due ${longDay(inv.due)}.`, 'If you’ve already paid, thank you, and please ignore this.'], button: { label: 'See and pay it', url },
+    text: `Hi ${firstName(c)}, a reminder from ${ws.name}: invoice ${inv.number} for ${money$(balance)} was due ${longDay(inv.due)}. ${url}`, replyTo: ownerReply(ws), what: 'payment reminder sent' }),
+};
 // On my way: the customer hears who's coming and about when.
-async function onMyWay(ws, auth, rec, v, minutes, send) {
+function omwMsg(ws, auth, rec, v, minutes) {
   const c = jobCustomer(rec);
   const mins = Math.max(5, Math.min(240, Math.round(Number(minutes) || 20)));
   const at = localNow(tzOf(ws), Date.now() + mins * 60_000).min;
   const who = auth.member.split(/\s+/)[0];
   const text = `Hi ${firstName(c)}, it's ${who} from ${ws.name}. I'm on my way and should be there around ${fmtMinutes(Math.round(at / 5) * 5)} (about ${mins} minutes).`;
+  return { c, text, msg: { tag: 'on-my-way', subject: `${who} from ${ws.name} is on the way`, heading: `${who} is on the way`, lines: [`Hi ${firstName(c)},`, `${who} from ${ws.name} is on the way for your ${v.kind.toLowerCase()} and should be there around ${fmtMinutes(Math.round(at / 5) * 5)}, in about ${mins} minutes.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : ''].filter(Boolean), text, replyTo: memberReply(ws, auth.memberId), what: 'on my way sent' } };
+}
+// built: the message exactly as it was previewed and confirmed (it holds an arrival time, so it's never made twice).
+async function onMyWay(ws, auth, rec, v, minutes, send, built = omwMsg(ws, auth, rec, v, minutes)) {
+  const { c, text, msg } = built;
   const out = send
-    ? await tellCustomer(ws, rec, c, { tag: 'on-my-way', subject: `${who} from ${ws.name} is on the way`, heading: `${who} is on the way`, lines: [`Hi ${firstName(c)},`, `${who} from ${ws.name} is on the way for your ${v.kind.toLowerCase()} and should be there around ${fmtMinutes(Math.round(at / 5) * 5)}, in about ${mins} minutes.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : ''].filter(Boolean), text, replyTo: memberReply(ws, auth.memberId), by: auth.member, what: 'on my way sent' })
+    ? await tellCustomer(ws, rec, c, { ...msg, by: auth.member })
     : await (async () => {
       const texted = await twilioText(ws, rec, c, text, auth.member, 'on my way sent');
       return { emailed: false, texted, email: emailable(c) ? c.email : null, dne: !!c && noContact(c), sms: !texted && c && !noContact(c) && c.phone ? smsOf(c, text) : null };
@@ -5986,10 +6187,7 @@ async function onMyWay(ws, auth, rec, v, minutes, send) {
 const reminderText = (ws, c, v, rec) => `Hi ${firstName(c)}, this is ${ws.name}: a reminder we're coming ${longDay(v.date)} ${visitTime(v)} for your ${v.kind.toLowerCase()}${jobAddress(rec) ? ' at ' + jobAddress(rec) : ''}. Reply if you need to change it.`;
 async function remindVisit(ws, rec, v, by = 'Kloomie') {
   const c = jobCustomer(rec);
-  const out = await tellCustomer(ws, rec, c, { tag: 'visit-reminder', subject: `Reminder: ${ws.name} is coming ${v.date === dayIn(tzOf(ws), Date.now() + 864e5) ? 'tomorrow' : longDay(v.date)}`, heading: `See you ${longDay(v.date)}`,
-    lines: [`Hi ${firstName(c)},`, `This is a reminder that ${ws.name} is coming ${longDay(v.date)} ${visitTime(v)} for your ${v.kind.toLowerCase()}.`, jobAddress(rec) ? `Address: ${jobAddress(rec)}` : '', 'Need to change it? Just reply to this email.'].filter(Boolean),
-    text: reminderText(ws, c, v, rec), replyTo: ownerReply(ws), by, what: 'visit reminder sent' });
-  return out;
+  return tellCustomer(ws, rec, c, { ...flowMsg.remind(ws, rec, c, v), by });
 }
 const reviewText = (ws, c, url) => `Hi ${firstName(c)}, thanks for choosing ${ws.name}! If you have a minute, a quick review would mean a lot to us: ${url}`;
 async function askReview(ws, rec, by = 'Kloomie') {
@@ -5998,9 +6196,7 @@ async function askReview(ws, rec, by = 'Kloomie') {
   rec.reviewAsked = Date.now();
   rec.reviewDue = null;
   save();
-  return tellCustomer(ws, rec, c, { tag: 'review-request', subject: `Thanks from ${ws.name}`, heading: `Thank you, ${firstName(c)}!`,
-    lines: [`Thanks for choosing ${ws.name}. We hope you're happy with the work.`, 'If you have a minute, a quick review helps a small business like ours more than anything.'],
-    button: { label: 'Leave a review', url: reviewUrl }, text: reviewText(ws, c, reviewUrl), replyTo: ownerReply(ws), by, what: 'review request sent' });
+  return tellCustomer(ws, rec, c, { ...flowMsg.review(ws, rec, c, reviewUrl), by });
 }
 // A job reaching Paid asks for a review an hour later, once, when the team has that turned on. The stage it was at
 // last time is kept on the job, so only a move to Paid counts (not a job that was already paid).
@@ -6014,14 +6210,17 @@ function jobChanged(rec) {
   if (was === undefined || was === now || now !== 'Paid' || rec.reviewAsked || rec.reviewDue) return;
   const ws = db.workspaces[rec.wsId];
   const cm = custMsgsOf(ws);
+  if (rec.onFlowSince) return; // a job that was ever on a Job Flow follows its flow's steps (PHASE3.md §4)
   if (cm.reviews && cm.reviewUrl && reachable(jobCustomer(rec))) rec.reviewDue = Date.now() + REVIEW_DELAY;
 }
 async function custMsgTick() {
+  await JF.autoMessages().catch((e) => alarm('Job Flow messages failed', e)); // even with email off: skips and waiting reasons
   if (mailer.mode === 'off' && !Object.keys(db.twilio || {}).length) return;
   const now = Date.now();
   // Reviews that are due.
   for (const rec of Object.values(db.records)) {
     if (!rec.reviewDue || rec.reviewDue > now || offline(rec.wsId)) continue;
+    if (rec.onFlowSince) { rec.reviewDue = null; continue; }
     const ws = db.workspaces[rec.wsId];
     if (!custMsgsOf(ws).reviews || !custMsgsOf(ws).reviewUrl) { rec.reviewDue = null; continue; }
     await askReview(ws, rec);
@@ -6035,6 +6234,7 @@ async function custMsgTick() {
     const here = localNow(tzOf(ws), now);
     if (list[0].date !== dayIn(tzOf(ws), now + 864e5) || here.min < REMIND_FROM) continue;
     const rec = db.records[list[0].recordId];
+    if (rec?.onFlowSince) continue; // its flow's Visit reminder step decides (PHASE3.md §4)
     for (const e of visitEntries(visitId)) e.reminded = now;
     save();
     if (rec && reachable(jobCustomer(rec))) await remindVisit(ws, rec, publicVisit(list));
@@ -6108,6 +6308,9 @@ function financeReport(ws, from, to) {
 // The team's one price list (Finance step 3): price list records from every board the person sees, then Inventory.
 function priceListFor(ws, auth) {
   const admin = isAdmin(auth), out = [];
+  if (!PJ.seesPrices(ws.id, auth.memberId)) return out; // members don't see prices (docs/jobflows/PRICES.md)
+  // The business's Items (Job Flows, PHASE2.md §2.1) come first, for owners and admins only.
+  if (admin) out.push(...JF.priceListItems(ws));
   for (const p of Object.values(db.projects)) {
     if (p.wsId !== ws.id || p.archived || !PJ.sees(p, auth.memberId)) continue;
     for (const x of PJ.priceList(p)) out.push({ id: x.id, source: 'list', board: p.name, name: x.item, description: x.description || '', unit: x.unit || '', price: x.price ?? null, ...(admin ? { cost: x.cost ?? null } : {}) });
@@ -6120,6 +6323,7 @@ function priceListFor(ws, auth) {
 }
 // What a price line's source charges now, to flag a quote whose prices changed since it was written.
 function priceNow(from, wsId) {
+  if (from?.startsWith('item:')) return JF.itemPrice(from.slice(5), wsId);
   if (from?.startsWith('inv:')) { const x = db.invItems?.[from.slice(4)]; return x && x.wsId === wsId ? { price: x.price ?? null, cost: x.cost ?? null } : null; }
   const r = db.records[from];
   const p = r && r.wsId === wsId && db.projects[r.projectId];
@@ -6403,7 +6607,7 @@ function workload(ws, week) {
     });
   }
   for (const [id, set] of visits) by.get(id).visits = set.size;
-  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.status === 'active' && by.get(c.ownerId)) by.get(c.ownerId).campaigns++;
+  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.status === 'active' && !isJobRun(c) && by.get(c.ownerId)) by.get(c.ownerId).campaigns++;
   return { week, days, today, people: [...by.values()], unassigned };
 }
 // ---------- the hours calculator (Team plan step 3, the owner 2026-11-20) ----------
@@ -6446,7 +6650,7 @@ function jobBoard(ws, auth) {
   const me = auth.memberId, admin = isAdmin(auth), today = teamDay(ws.id);
   const nameOf = (id) => ws.members.find((x) => x.id === id)?.name || null;
   const byJob = new Map(), tasksBy = new Map();
-  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.recordId && c.status !== 'done' && db.records[c.recordId]) (byJob.get(c.recordId) || byJob.set(c.recordId, []).get(c.recordId)).push(c);
+  for (const c of Object.values(db.campaigns)) if (c.wsId === ws.id && c.recordId && c.status !== 'done' && !isJobRun(c) && db.records[c.recordId]) (byJob.get(c.recordId) || byJob.set(c.recordId, []).get(c.recordId)).push(c);
   for (const t of Object.values(db.tasks)) if (t.wsId === ws.id && t.goalId && !t.skipped) (tasksBy.get(t.goalId) || tasksBy.set(t.goalId, []).get(t.goalId)).push(t);
   const jobs = [];
   for (const [id, camps] of byJob) {
@@ -6606,7 +6810,7 @@ function forecast(ws, auth, weeks = FC_WEEKS) {
   const stock = new Map(), gear = new Map(), visitsToBook = [];
   const jobNeeds = new Map(); // job id -> Set of item ids / visit kinds it's short of
   for (const c of Object.values(db.campaigns)) {
-    if (c.wsId !== ws.id || c.status === 'done' || !c.recordId || !db.records[c.recordId]) continue;
+    if (c.wsId !== ws.id || c.status === 'done' || c.status === 'cancelled' || !c.recordId || !db.records[c.recordId]) continue;
     const rec = db.records[c.recordId], open = sees(c) && recSeen(rec.id);
     for (const g of goalsInOrder(c)) {
       if (!g.needs?.length || stepFinished(g)) continue;
@@ -7440,7 +7644,7 @@ const TASK_TOOLS = {
 const CONTACT_COLS = ['Name', 'Business', 'Phone', 'Email', 'Website', 'City', 'Source'];
 function taskBrief(ws, auth, t) {
   const g = db.goals[t.goalId];
-  const c = g && db.campaigns[g.campaignId];
+  const c = taskCampaign(t);
   const p = c?.parentId && db.campaigns[c.parentId];
   const l = t.listId && db.lists[t.listId];
   const files = (t.files || []).map((id) => db.items[id]).filter(Boolean);
@@ -7599,7 +7803,7 @@ function askSources(ws, auth, q, n = 8) {
   }
   for (const r of Object.values(db.records)) {
     if (r.wsId !== ws.id) continue;
-    const story = PJ.recordStory(r, ws, (kind, x) => canSee(auth, kind, x));
+    const story = PJ.recordStory(r, ws, (kind, x) => canSee(auth, kind, x), PJ.viewOf(ws.id, auth.memberId));
     const s = story && score('', story);
     if (!s || !PJ.recordAt(r.id, ws.id, auth.memberId)) continue;
     out.push({ kind: 'record', id: r.id, title: story.split('\n')[0].replace(/^A .*? in the project “[^”]*”: /, '').replace(/\.$/, '') || 'A record', text: story, s });
@@ -7659,7 +7863,7 @@ async function aiRecord(ws, auth, body) {
   const prompt = [
     `Today is ${today} (${new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })}). The person asking is ${auth.member}.`,
     teamLine(ws, auth.memberId),
-    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x)),
+    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x), PJ.viewOf(ws.id, auth.memberId)),
     doc ? `Their notes on it:\n${clipText(doc.text, 3000)}` : '',
     selects.length ? `Fields with options (for a stage change): ${selects.map((f) => `${f.name}: ${f.choices.map((c) => c.label).join(', ')}`).join('; ')}` : '',
     body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
@@ -7688,6 +7892,7 @@ async function aiRecord(ws, auth, body) {
 // An estimate from the job's scope, its plans and photos (PDFs and pictures go to the AI whole), and the price
 // list. Lines matched to the price list take its price and cost, never the AI's.
 async function aiEstimate(ws, auth, body) {
+  if (!PJ.seesPrices(ws.id, auth.memberId)) throw Object.assign(new Error('Prices are for owners and admins.'), { status: 403 });
   const at = PJ.recordAt(body.recordId, ws.id, auth.memberId);
   if (!at) throw Object.assign(new Error('That record is gone.'), { status: 404 });
   const { rec, p, t } = at;
@@ -7713,7 +7918,7 @@ async function aiEstimate(ws, auth, body) {
     }
   }
   const prompt = [
-    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x)),
+    PJ.recordStory(rec, ws, (kind, x) => canSee(auth, kind, x), PJ.viewOf(ws.id, auth.memberId)),
     files.length ? `Attached: ${files.map((f) => f.name).join('; ')}. Read them for sizes, counts and conditions.` : 'Nothing is attached; work from the scope and notes.',
     list.length ? `The price list (use these items, by id, wherever one fits):\n${list.map((x) => `- [${x.id}] ${x.item}${x.description ? ' — ' + x.description : ''} · per ${x.unit || 'each'} · $${((x.price || 0) / 100).toFixed(2)}`).join('\n')}` : 'There is no price list; price lines at typical rates and say so in the assumptions.',
     body.ask ? `They ask: ${cleanText(body.ask, 1000)}` : '',
@@ -8502,10 +8707,27 @@ async function api(req, res, url) {
     // On my way, or a reminder sent now: emailed to the customer when asked, and the text for the person's phone.
     if (m === 'POST' && c === 'on-my-way') {
       const body = await readJson(req, 5_000);
-      return send(res, 200, await onMyWay(ws, auth, rec, publicVisit(list), body.minutes, body.email !== false));
+      const v = publicVisit(list);
+      const email = body.email !== false;
+      const built = omwMsg(ws, auth, rec, v, body.minutes);
+      const { c: cust, msg } = built;
+      // Only when Kloomie itself would send (an email, or a text from the team's number); the phone's own Messages app
+      // needs no ticket.
+      if (viaOf(cust, email)) {
+        const gate = sendGate(ws, auth, 'on-my-way', v.id, custPreview(cust, msg, { admin: isAdmin(auth), phone: true, email }), custDigest(cust, msg, email), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
+      return send(res, 200, await onMyWay(ws, auth, rec, v, body.minutes, email, built));
     }
     if (m === 'POST' && c === 'remind') {
+      const body = await readJson(req, 5_000).catch(() => ({}));
       const v = publicVisit(list);
+      const cust = jobCustomer(rec);
+      if (viaOf(cust)) {
+        const msg = flowMsg.remind(ws, rec, cust, v);
+        const gate = sendGate(ws, auth, 'remind', v.id, custPreview(cust, msg, { admin: isAdmin(auth) }), custDigest(cust, msg), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
       const out = await remindVisit(ws, rec, v, auth.member);
       for (const e of list) e.reminded = Date.now();
       save();
@@ -8541,11 +8763,36 @@ async function api(req, res, url) {
       return send(res, e.status || 502, { error: e.message });
     }
   }
+  // Test only (never in production, and only with its switch on): run a call as an agent working for this person, and
+  // count the team's send tickets (PHASE3B.md §7).
+  if (a === 'test' && process.env.NODE_ENV !== 'production' && process.env.SENDS_TEST_AGENT === '1') {
+    if (b === 'agent-call' && m === 'POST') {
+      const body = await readJson(req, 20_000);
+      return send(res, 200, await replayAs(ws, auth.memberId, null, { method: String(body.method || 'GET'), path: String(body.path || ''), body: body.body ?? null }, 'Test agent'));
+    }
+    if (b === 'send-tickets' && m === 'GET') {
+      const all = Object.values(db.sendTickets || {}).filter((x) => x.wsId === ws.id);
+      return send(res, 200, { open: all.filter((x) => !x.used).length, total: all.length });
+    }
+    // Which of these tickets are still kept (by id), in one call.
+    if (b === 'send-tickets' && m === 'POST') {
+      const { ids } = await readJson(req, 50_000);
+      const has = Object.fromEntries((Array.isArray(ids) ? ids : []).slice(0, 500).map((id) => [String(id), Object.hasOwn(db.sendTickets || {}, String(id)) && db.sendTickets[String(id)].wsId === ws.id]));
+      return send(res, 200, { has });
+    }
+  }
   // Asking the customer for a review: emailed now (with the team's review link), and the text for a phone.
   if (a === 'records' && c === 'review-request' && m === 'POST') {
     const at = PJ.recordAt(b, ws.id, auth.memberId);
     if (!at || !jobOfRecord(at.rec)) return send(res, 404, { error: 'That job is gone.' });
     if (!custMsgsOf(ws).reviewUrl) return send(res, 400, { error: 'Add your review link first, in Settings → Team settings → Customer messages.' });
+    const body = await readJson(req, 5_000).catch(() => ({}));
+    const cust = jobCustomer(at.rec);
+    if (viaOf(cust)) {
+      const msg = flowMsg.review(ws, at.rec, cust, custMsgsOf(ws).reviewUrl);
+      const gate = sendGate(ws, auth, 'review', at.rec.id, custPreview(cust, msg, { admin: isAdmin(auth) }), custDigest(cust, msg), body.confirm);
+      if (gate) return send(res, gate.status, gate.body);
+    }
     return send(res, 200, await askReview(ws, at.rec, auth.member));
   }
   {
@@ -8559,6 +8806,8 @@ async function api(req, res, url) {
     if (out !== null) return;
   }
   {
+    const jf = await JF.route(req, res, parts, auth, ws);
+    if (jf !== null) return;
     const out = await INV.route(req, res, parts, auth, ws);
     if (out !== null) return;
   }
@@ -8880,7 +9129,7 @@ async function api(req, res, url) {
         signNews = { type: 'signoff', task: null, by: auth.member };
       } else if (body.done && !t.done) {
         next.doneBy = auth.member;
-        setImmediate(() => db.tasks[next.id]?.done && automate(ws.id, 'task.done', { task: next, campaign: taskCamp(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
+        setImmediate(() => db.tasks[next.id]?.done && automate(ws.id, 'task.done', { task: next, campaign: taskCampaign(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
         setImmediate(() => db.tasks[next.id]?.done && hook(ws.id, 'task.done', () => API.apiTask(db.tasks[next.id]), auth.member));
         next.updatedAt = Date.now();
         if (next.signoff) next.approved = { by: auth.member, at: Date.now() };
@@ -8892,7 +9141,7 @@ async function api(req, res, url) {
         signNews = { type: 'returned', task: null, by: auth.member, note: next.returned.note };
       } else if (body.done === false && t.done) {
         next.approved = null;
-        setImmediate(() => db.tasks[next.id] && !db.tasks[next.id].done && automate(ws.id, 'task.reopened', { task: db.tasks[next.id], campaign: taskCamp(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
+        setImmediate(() => db.tasks[next.id] && !db.tasks[next.id].done && automate(ws.id, 'task.reopened', { task: db.tasks[next.id], campaign: taskCampaign(next), who: auth.member, whoId: auth.memberId, private: privateTask(next) }));
       }
       // Who handed it over, so the new assignee can be told.
       if (next.assigneeId !== t.assigneeId || next.roleId !== t.roleId || next.castId !== t.castId) next.assignedBy = next.assigneeId || next.roleId || next.castId ? auth.memberId : null;
@@ -9470,6 +9719,12 @@ async function api(req, res, url) {
       const conn = mailConn(ws.id, auth.memberId);
       if (!conn) return send(res, 400, { error: 'Connect Outlook or Gmail in Settings to email it from Kloomie, or copy the link and send it yourself.' });
       if (!open) return send(res, 400, { error: 'This request is closed.' });
+      {
+        const body = await readJson(req, 5_000).catch(() => ({}));
+        const pv = { to: x.signer.name || x.signer.email, via: 'email', email: x.signer.email, subject: `Please sign: ${x.name}`, text: `${x.by} at ${ws.name} sent you “${x.name}” to sign. (From ${conn.account}.)` };
+        const gate = sendGate(ws, auth, 'sign-email', x.id, pv, sha256(JSON.stringify([x.signer.email, x.id, conn.account])), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
       const first = x.signer.name.split(/\s+/)[0];
       const until = new Date(x.expiresAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
       const text = `Hi ${first},\n\n${x.by} at ${ws.name} sent you “${x.name}” to sign.\n\n${x.message ? x.message + '\n\n' : ''}Read it and sign here:\n${signLink(x)}\n\nThe link works until ${until}.\n`;
@@ -9737,6 +9992,12 @@ async function api(req, res, url) {
     return send(res, 405, { error: 'Method not allowed' });
   }
 
+  // Jobs and clients on the map (PHASE4.md §2): looked up on request, never kept.
+  if (a === 'map' && b === 'jobs' && m === 'GET' && !c) {
+    if (!toolsOf(ws).projects || !toolsOf(ws).map) return send(res, 403, { error: 'The Map or Boards are switched off for this team.' });
+    const out = await JF.mapJobs(ws, auth, new URL(req.url, 'http://x').searchParams);
+    return send(res, out.status || 200, out.body);
+  }
   if (a === 'map' && m === 'GET' && !b) {
     const mine = (x) => x.wsId === ws.id && x.memberId === auth.memberId;
     return send(res, 200, {
@@ -10083,6 +10344,9 @@ async function api(req, res, url) {
       if (noContact(x)) return send(res, 400, { error: `${x.name || 'They'} asked not to be contacted.` });
       const subject = cleanText(body.subject, 200), text = String(body.body ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 5000);
       if (!subject || !text) return send(res, 400, { error: 'Write the subject and the message.' });
+      // An automation's email comes here already OK'd (the Flows hold); anyone else asks first (PHASE3B.md §1).
+      const gate = sendGate(ws, auth, 'contact-email', x.id, { to: x.name || x.email, via: 'email', ...(isAdmin(auth) ? { email: x.email } : {}), subject, text }, sha256(JSON.stringify([x.email, subject, text])), body.confirm);
+      if (gate) return send(res, gate.status, gate.body);
       try {
         const out = await agentEmail(ws, auth.memberId, { name: x.name || '', email: x.email, subject, text });
         const at = body.recordId && PJ.recordAt(String(body.recordId), ws.id, auth.memberId);
@@ -11076,6 +11340,50 @@ async function api(req, res, url) {
     return send(res, 200, publicWorkspace(ws, auth.memberId));
   }
 
+  // Settings → Quotes & invoices (PHASE3B.md §3): owners and admins.
+  if (a === 'docs-settings') {
+    if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins change how quotes and invoices look.' });
+    const out = () => { const d = docsOf(ws); return { ...d, signature: d.signature ? { url: logoUrl(d.signature), name: d.signature.name, title: d.signature.title || '' } : null }; };
+    if (m === 'GET' && !b) return send(res, 200, out());
+    if (m === 'PATCH' && !b) {
+      try { ws.docs = { ...cleanDocs(docsOf(ws), await readJson(req, 50_000), cleanText), signature: docsOf(ws).signature }; } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+      save();
+      return send(res, 200, out());
+    }
+    if (b === 'signature' && m === 'PUT') {
+      const body = await readJson(req, 400_000);
+      const buf = Buffer.from(String(body.image || '').replace(/^data:image\/(png|jpeg);base64,/, ''), 'base64');
+      const mime = /^data:image\/(png|jpeg);base64,/.test(String(body.image || '')) ? imageType(buf) : null;
+      if (!['image/png', 'image/jpeg'].includes(mime)) return send(res, 400, { error: 'Use a PNG or JPEG image, or draw it.' });
+      if (buf.length > 200_000) return send(res, 400, { error: 'Keep the signature under 200 KB.' });
+      const name = cleanText(body.name, 80).trim();
+      if (!name) return send(res, 400, { error: 'Add the name of who signs (and their title, if you like).' });
+      const f = { id: rid(), mime };
+      await fsp.writeFile(logoPath(f), buf);
+      // Every signature stays served, so a quote already sent keeps showing the one it was sent with.
+      ws.docsFiles = [...(ws.docsFiles || []), f];
+      ws.docs = { ...docsOf(ws), signature: { ...f, name, title: cleanText(body.title, 80).trim() } };
+      save();
+      return send(res, 200, out());
+    }
+    if (b === 'signature' && m === 'DELETE') {
+      ws.docs = { ...docsOf(ws), signature: null };
+      save();
+      return send(res, 200, out());
+    }
+    return send(res, 405, { error: 'Method not allowed' });
+  }
+  // Test only (never in production): an issued job quote moved back in time, to see it expire.
+  if (a === 'test' && b === 'backdate-quote' && m === 'POST' && process.env.NODE_ENV !== 'production' && process.env.QUOTE_TEST_BACKDATE === '1') {
+    const body = await readJson(req, 2_000);
+    const rec = db.records[body.recordId];
+    if (!rec || rec.wsId !== ws.id || !rec.quoteLook) return send(res, 404, { error: 'No issued quote there.' });
+    const back = (d) => d && new Date(Date.parse(d + 'T12:00:00Z') - Number(body.days || 0) * 864e5).toISOString().slice(0, 10);
+    rec.quoteLook.issued = back(rec.quoteLook.issued);
+    if (rec.quoteLook.validUntil) rec.quoteLook.validUntil = back(rec.quoteLook.validUntil);
+    save();
+    return send(res, 200, { ok: true });
+  }
   if (a === 'brand') {
     if (!isAdmin(auth)) return send(res, 403, { error: 'Only team owners and admins can change the brand.' });
     const old = ws.brand?.logo;
@@ -11265,7 +11573,7 @@ async function api(req, res, url) {
   }
 
   if (a === 'stacks') {
-    const rq = b && c === 'request' && ws.stacks.find((x) => x.id === b && seesCampaign(x.campaignId, auth.memberId));
+    const rq = b && c === 'request' && ws.stacks.find((x) => x.id === b && seesStack(x, auth.memberId));
     if (c === 'request' && !rq) return send(res, 404, { error: 'Not found' });
     if (rq && m === 'POST') {
       // A link anyone can use to drop files into this stack, no account needed.
@@ -11316,7 +11624,7 @@ async function api(req, res, url) {
     if (m === 'POST' && !d) {
       const body = await readJson(req);
       const kind = String(body.kind || ''), id = String(body.id || '').slice(0, 64);
-      if (!CHAT_PIN_KINDS.includes(kind)) return send(res, 400, { error: 'Stacks, docs, folders and agents can be pinned to a chat.' });
+      if (!CHAT_PIN_KINDS.includes(kind)) return send(res, 400, { error: 'Stacks, docs, folders, agents and jobs can be pinned to a chat.' });
       if (!chatPinSees(ws, { kind, id }, auth.memberId)) return send(res, 404, { error: 'That isn’t there any more.' });
       // Gone things drop off before counting.
       for (let i = list.length - 1; i >= 0; i--) if (chatPinSees(ws, list[i], auth.memberId) === null) list.splice(i, 1);
@@ -12118,7 +12426,7 @@ function replayPathOk(p) {
   return REPLAY_PATH.test(path) && REPLAY_QUERY.test(query) && new URL(s, 'http://replay').pathname === path;
 }
 // flow: the automation it's for (Flows step 3), named as it on what it does.
-async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as = null, flow = null) {
+async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as = null, flow = null, opts = {}) {
   if (!replayPathOk(p)) {
     console.error('Refused a replay to an odd address:', String(p).slice(0, 120));
     return { status: 400, body: { error: 'That isn’t an address Kloomie can do that at.' } };
@@ -12127,7 +12435,7 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   const req = Readable.from(body == null ? [] : [Buffer.from(JSON.stringify(body))]);
   Object.assign(req, { method, url: p, headers: { 'content-type': 'application/json' }, socket: { remoteAddress: 'replay' } });
   if (!me) return { status: 403, body: { error: 'They aren’t on the team any more.' } };
-  req.replay = { token: null, wsId: ws.id, ws, memberId, member: flow ? flow.name : as || me.name, role: me.role, tz: tzOf(ws), approved: approvalId, ...(as ? { agent: true } : {}), ...(flow ? { flow: flow.id } : {}) };
+  req.replay = { token: null, wsId: ws.id, ws, memberId, member: flow ? flow.name : as || me.name, role: me.role, tz: tzOf(ws), approved: approvalId, ...(as ? { agent: true } : {}), ...(opts.personOk ? { personOk: true } : {}), ...(flow ? { flow: flow.id } : {}) };
   const res = new EventEmitter();
   let status = 200, out = '';
   Object.assign(res, { headersSent: false, setHeader() {}, getHeader() {}, writeHead(code) { status = code; this.headersSent = true; return this; }, write(c) { out += c; return true; }, end(c) { if (c) out += c; this.emit('finish'); } });
@@ -12137,8 +12445,8 @@ async function replayAs(ws, memberId, approvalId, { method, path: p, body }, as 
   return { status, body: parsed };
 }
 const hold = (...a) => RULES.hold(...a);
-const PJ = projectsModule({ seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
-  onRecordGone: (rec) => { dropVisits(rec); INV.dropFor(rec); campsOffJob(rec); }, stageGate: (...a) => stageGate(...a),
+const PJ = projectsModule({ docsOf, bizHtml, inkedPng, jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
+  onRecordGone: (rec) => recordGoneAll(rec), stageGate: (...a) => stageGate(...a),
   onRecordNews: (rec) => { jobChanged(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
@@ -12237,7 +12545,7 @@ const DESCRIBE = describeModule({ cleanText, readJson, send, aiAsk, replyJson, P
 const SIGNOFF = signoffModule({
   db, save, broadcast, rid, cleanText, readJson, send, badRequest, PJ, EMAIL_RE, CONSENT, SIGN_DAYS,
   dayIn, okTz, tzOf, utc, sha256, pngData, pdfWork, writeForm, stampPdf, addCertificate, addPdf, canSee, isPdf,
-  signEvent, signLink, signStatus, signNews: (x) => signNews(x),
+  signEvent, signLink, signStatus, signNews: (x) => signNews(x), sendGate: (...a) => sendGate(...a),
   readItem: (it) => fsp.readFile(path.join(FILES_DIR, it.id)),
   async writeSignFiles(x, unsigned, signed) {
     await fsp.writeFile(signPath(x), unsigned);
@@ -12407,7 +12715,7 @@ async function itemFile(ws, memberId, id) {
   if (!it || it.wsId !== ws.id || it.type !== 'file' || !/^image\//.test(it.mime || '') || !canSee({ wsId: ws.id, memberId, role: me?.role }, 'item', it)) throw badRequest('That picture isn’t in Kloomie any more.');
   return { bytes: await fsp.readFile(path.join(FILES_DIR, it.id)), name: it.name, mime: it.mime };
 }
-const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, offWhy, sees: (memberId, kind, x) => (kind === 'campaign' ? seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, rid,
+const AGENTS_M = agentsModule({ autoEvents: FL.EVENTS, offWhy, sees: (memberId, kind, x) => (kind === 'campaign' ? !isJobRun(x) && seesCampaign(x.id, memberId) : canSee({ memberId }, kind, x)), db, save, rid,
   // Every change to a run goes out as news; one asked in chat is answered there as soon as it's done.
   broadcast: (wsId, msg) => { broadcast(wsId, msg); if (msg?.type === 'agent' && msg.run?.id && db.chatAsks?.[msg.run.id]) chatAskDone(msg.run.id); }, cleanText, readJson, send, notify, replay: replayAs, run: agentLlm, sendEmail: agentEmail, textToDoc, PJ, isAdminId, localNow, tzOf, fmtMinutes, hasAi: (wsId, memberId) => !!aiUse(aiOf(wsId, memberId)), POSTIZ, makeImageItem, itemFile, noContact, describeImages, canPicture: (wsId, memberId) => ['openai', 'gemini'].some((k) => !!aiOf(wsId, memberId).keys?.[k]?.sealed) });
 const GH = githubModule({ bind: OAUTH_BIND, automate: (...x) => automate(...x), alarm: (...x) => alarm(...x), db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, PJ, sees: (p, mid) => PJ.sees(p, mid), publicUrl: PUBLIC_URL });
@@ -12440,7 +12748,7 @@ function ccCtx(ctx) {
   return rec && t ? { ...rest, record: rec, project: p, list: t, recordName: String(rec.values[t.primary] ?? '') } : rest;
 }
 // Microsoft Teams (teams.js): a Teams Workflows address the team pastes; automations and people (after a yes) post to it.
-WB = whiteboardModule({ db, save, send, readJson, cleanText, rid, broadcast, sockets, isAdmin, isAdminId, seesCampaign, ownOnly, toolsOf, memberMay });
+WB = whiteboardModule({ db, save, send, readJson, cleanText, rid, broadcast, sockets, isAdmin, isAdminId, seesCampaign: (id, m) => !isJobRun(db.campaigns[id]) && seesCampaign(id, m), ownOnly, toolsOf, memberMay });
 setInterval(() => WB.sweep(), 3600_000).unref();
 const TEAMS = teamsModule({ db, save, send, readJson, cleanText, seal, unseal, isAdmin, safeFetch, broadcast, allowLocal: process.env.ALLOW_LOCAL_WEBHOOKS === '1' });
 const CC = companycamModule({ db, save, broadcast, rid, cleanText, readJson, send, seal, unseal, isAdmin, safeFetch, publicUrl: PUBLIC_URL, jobsOf: ccJobs, addPhoto: ccPhoto, automate: (w, k, x) => automate(w, k, ccCtx(x)), alarm: (...x) => alarm(...x) });
@@ -12523,7 +12831,11 @@ const STOCK = inventoryModule({ db, save, broadcast, rid, cleanText, readJson, s
   labelUrl: (tag) => `${PUBLIC_URL}/a/${tag}`,
   labelQr: (tag) => 'data:image/svg+xml;base64,' + Buffer.from(qrSvg(`${PUBLIC_URL}/a/${tag}`, { scale: 8 })).toString('base64'),
   projectFor: (pid, wsId, memberId) => { const p = db.projects[pid]; return p && p.wsId === wsId && PJ.sees(p, memberId) ? { p, records: Object.values(db.records).filter((r) => r.projectId === p.id) } : null; } });
-const INV = invoicesModule({ proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
+const JF = jobFlowsModule({ sendGate: (...a) => sendGate(...a), custPreview: (...a) => custPreview(...a), custDigest: (...a) => custDigest(...a), notify: (...a) => notify(...a), notifyAdmins: (...a) => notifyAdmins(...a), db, save, broadcast, rid, cleanText, readJson, send, isAdmin, PJ, toolsOf, goalsInOrder, tasksInOrder, applyTask, publicTask: (t) => publicTask(t), canSeeTask: (auth, t) => canSee(auth, 'task', t), stepsSoon: (w) => stepsSoon(w), sweepNow: (w, by, byId) => jobSteps(w, by, byId), visitsOf: (id) => visitsOf(id), needsMet: (g) => needsMet(g), noteWork: (t, was) => noteWork(t, was), makeInvoice: (...a) => INV.makeFor(...a), sendInvoice: (...a) => INV.sendIt(...a), invoiceTotals: (inv) => INV.totals(inv), invoiceUrl: (inv) => INV.publicInvoice(inv).url, flowTell: (...a) => flowTell(...a), flowReach: (c) => flowReach(c), flowMsg, customerOf: (rec) => jobCustomer(rec), teamClock: (ws) => ({ today: dayIn(tzOf(ws)), tomorrow: dayIn(tzOf(ws), Date.now() + 864e5), min: localNow(tzOf(ws), Date.now()).min }), teamReviewUrl: (ws) => custMsgsOf(ws).reviewUrl || '', saveNow: () => writeNow(), sendable: (ws) => !offline(ws.id) && !billingOf(ws).readOnly, shareRecord: (...a) => PJ.shareRecord(...a), quoteUrlOf: (rec) => (rec.share?.token ? `${PUBLIC_URL}/q/${rec.share.token}` : null), itemsTotals: (v) => PJ.itemsTotals(v), priceChanged: (ws, auth, x) => priceChanged(ws, auth, x), publicUrl: PUBLIC_URL, stock: STOCK,
+  geocode: (addr) => (routesOn() ? geocodeOnce(addr, 5000) : Promise.resolve(undefined)), mapsOn: () => routesOn(),
+  presetsOf: (wsId) => presetsOf(wsId), templateFor: (ws, auth, id) => { const t = db.templates[id]; return t && t.wsId === ws.id && seesTemplate(t, auth.memberId) ? t : null; },
+  campaignFromSnapshot: (...a) => campaignFromSnapshot(...a), stockMove: (...a) => STOCK.move(...a) });
+const INV = invoicesModule({ docsOf, bizHtml, onInvoice: (inv) => { JF.invoiceNews(inv); stepsSoon(inv.wsId); }, flowDueDays: (rec) => JF.dueDaysFor(rec), bindInvoice: (rec, inv, stepId) => JF.bindInvoice(rec, inv, stepId), proofUrl: (ws) => pagesProof(ws), stockCost: (recId) => STOCK.stockCost(recId), jobMoney: (recId) => jobMoney(recId), notifyAdmins: (...a) => notifyAdmins(...a), jobBack: (rec) => jobBack(rec), onPaymentGone: (...a) => QB.paymentGone(...a), db, save, broadcast, rid, hold, cleanText, readJson, send, badRequest, escHtml, brandOf, logoUrl, teamDay, offline, seal, unseal, stripeCall: stripe.callWith, PJ, isAdmin, jobOfRecord, jobLabel, moveJob, publicUrl: PUBLIC_URL, emit: (...a) => { PJ.emit(...a); QB.soon(a[0]); try { eventFromHook(a[0], a[1], a[2], a[3]); } catch (e) { alarm('An automation event failed to build', e); } },
   // A payment is money in on the business's Finance, under the team's owner.
   addMoney: (ws, { amount, day, note, invoiceId = null }) => {
     const owner = ws.members.find((m) => m.role === 'owner') || ws.members[0];
@@ -12539,7 +12851,7 @@ const ANALYTICS = analyticsModule({ db, save, rid, readJson, cleanText, notifyAd
 setInterval(() => { try { ANALYTICS.checkAll(); } catch (e) { alarm('Checking goals and alerts failed', e); } }, Number(process.env.KPI_WATCH_MS) || 15 * 60_000).unref?.();
 // Texting through the team's own Twilio account (twilio.js).
 const notifyAdmins = (wsId, n) => { for (const mb of db.workspaces[wsId]?.members || []) if (isAdminId(wsId, mb.id)) notify(wsId, mb.id, n); };
-const TW = twilioModule({ db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl: PUBLIC_URL, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins,
+const TW = twilioModule({ sendGate: (...a) => sendGate(...a), db, save, broadcast, seal, unseal, readJson, send, isAdmin, rid, cleanText, publicUrl: PUBLIC_URL, contactsOf, phoneKey, noContact, newContact, contactNews, notifyAdmins,
   hook: (wsId, type, data) => hook(wsId, type, () => (type.startsWith('contact.') ? API.apiContact(data) : data), 'Text message'), alarm, offline, teamDay });
 // Files from Google Drive, OneDrive and Dropbox: the browser opens each one's own file picker, downloads what's picked
 // straight from there and uploads it into the stack like any file, so Kloomie never fetches outside addresses. These
@@ -13164,7 +13476,7 @@ async function removeMember(ws, m, { removed = false } = {}) {
   for (const p of Object.values(db.projects)) {
     if (p.wsId !== wsId) continue;
     if (p.private && p.memberId === id && !(p.memberIds || []).some((x) => x !== id)) {
-      for (const x of Object.values(db.records)) if (x.projectId === p.id) delete db.records[x.id];
+      for (const x of Object.values(db.records)) if (x.projectId === p.id) { delete db.records[x.id]; recordGoneAll(x); }
       for (const h of Object.values(db.webhooks)) if (h.projectId === p.id) delete db.webhooks[h.id];
       delete db.projects[p.id];
       continue;
@@ -13263,7 +13575,7 @@ async function buildExport(x) {
   const data = {};
   for (const [coll, ok] of Object.entries(sees)) data[coll] = Object.values(db[coll] || {}).filter((y) => inWs(y) && ok(y) && made(y));
   // Locked fields (lock combos, codes) stay out of exports, even sealed.
-  data.records = data.records.map(({ secrets, ...y }) => y);
+  data.records = data.records.map(({ secrets, ...y }) => PJ.rawFor(y, PJ.viewOf(ws.id, me.id)));
   const sig = db.signatures[sigKey(ws.id, me.id)];
   if (sig) data.signatures = [sig];
   if (!mineOnly && me.role === 'owner' && db.pss[ws.id]) data.pss = { dne: db.pss[ws.id].dne || [] };
@@ -13276,7 +13588,7 @@ async function buildExport(x) {
     : {
         name: ws.name, createdAt: ws.createdAt, tz: tzOf(ws), settings: ws.settings, brand: ws.brand, roles: ws.roles,
         members: ws.members.map((m) => ({ id: m.id, name: m.name, role: m.role, roleIds: m.roleIds || [], createdAt: m.createdAt })),
-        stacks: ws.stacks.filter((st) => seesCampaign(st.campaignId, me.id)), channels: publicChannels(ws, me.id),
+        stacks: ws.stacks.filter((st) => seesStack(st, me.id)), channels: publicChannels(ws, me.id),
         chatFolders: ws.chatFolders, dirs: ws.dirs.filter((d) => seesDir(ws, d.id, me.id)),
       };
 

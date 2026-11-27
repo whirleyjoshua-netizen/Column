@@ -364,8 +364,9 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
     if (!t) return null;
     const out = { id: r.id, project: p.name, list: t.singular || t.name, name: String(r.values[t.primary] ?? '') || 'Untitled' };
     let n = 0;
+    const prices = PJ.seesPrices(ws.id, memberId); // members don't see prices (docs/jobflows/PRICES.md)
     for (const f of t.fields) {
-      if (f.id === t.primary || n >= extra) continue;
+      if (f.id === t.primary || n >= extra || (!prices && PJ.isPriced(p, t, f))) continue;
       const w = fieldWords(ws, memberId, f, r.values[f.id], noPeople);
       if (w) { out[f.name] = w; n++; }
     }
@@ -460,7 +461,7 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
       async run(cx, a) {
         const at = PJ.recordAt(String(a.id), cx.ws.id, cx.memberId);
         if (!at) throw new Error('No record with that id that you can see.');
-        return { id: at.rec.id, about: PJ.recordStory(at.rec, cx.ws, (kind, v) => !(kind === 'task' && cutOff(cx, 'tasks')) && sees(cx.memberId, kind, v)) };
+        return { id: at.rec.id, about: PJ.recordStory(at.rec, cx.ws, (kind, v) => !(kind === 'task' && cutOff(cx, 'tasks')) && sees(cx.memberId, kind, v), PJ.viewOf(cx.ws.id, cx.memberId)) };
       },
     },
     list_campaigns: {
@@ -1341,7 +1342,9 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
   const same = (x, y) => String(x ?? '').trim().toLowerCase() === String(y ?? '').trim().toLowerCase() && String(x ?? '').trim() !== '';
   const jobsOpen = (cx) => !offWhy(cx.ws, cx.memberId, 'projects') && !cutOff(cx, 'jobs');
   const mineTask = (cx, t) => t.assigneeId === cx.memberId || (!t.assigneeId && !t.roleId && t.memberId === cx.memberId) || (t.roleId && (memberOf(cx.ws, cx.memberId)?.roleIds || []).includes(t.roleId));
-  const taskLine = (cx, t) => ({ id: t.id, task: t.text.slice(0, 200), due: t.due || null, priority: t.priority || undefined, for: t.assigneeId ? nameOf(cx.ws, t.assigneeId) : t.roleId ? (cx.ws.roles || []).find((r) => r.id === t.roleId)?.name : undefined, campaign: t.goalId ? db.campaigns[db.goals[t.goalId]?.campaignId]?.name : undefined, about: t.recordId && jobsOpen(cx) && PJ.recordAt(t.recordId, cx.ws.id, cx.memberId) ? recTitle(t.recordId) : undefined, waitingOn: t.blockedBy?.length ? true : undefined });
+  // A Job Flow run is never named as a campaign: its tasks are the job's (docs/jobflows/CONTRACTS.md §4).
+  const runlessName = (c) => (c && c.kind !== 'job' ? c.name : undefined);
+  const taskLine = (cx, t) => ({ id: t.id, task: t.text.slice(0, 200), due: t.due || null, priority: t.priority || undefined, for: t.assigneeId ? nameOf(cx.ws, t.assigneeId) : t.roleId ? (cx.ws.roles || []).find((r) => r.id === t.roleId)?.name : undefined, campaign: t.goalId ? runlessName(db.campaigns[db.goals[t.goalId]?.campaignId]) : undefined, about: t.recordId && jobsOpen(cx) && PJ.recordAt(t.recordId, cx.ws.id, cx.memberId) ? recTitle(t.recordId) : undefined, waitingOn: t.blockedBy?.length ? true : undefined });
   // F10: while a step's label is made (safeLabel), only what the person can see is named.
   let labelCx = null;
   const seen = (kind, x) => !!x && (!labelCx || (x.wsId === labelCx.ws.id && sees(labelCx.memberId, kind, x)));
@@ -1760,9 +1763,9 @@ Reply with JSON only: {"summary":"one line on the plan","parts":[{"agent":"${age
     }));
   };
   const stepOf = (x, stepId) => { for (const p of x.parts) { const s = p.steps.find((y) => y.id === stepId); if (s) return { p, s }; } return null; };
-  const cxFor = (x, agent) => {
+  const cxFor = (x, agent, personOk = false) => {
     const ws = db.workspaces[x.wsId];
-    return { ws, agent, memberId: x.memberId, runId: x.id, today: localNow(tzOf(ws), Date.now()).date, nowMin: 0, call: (method, path, body) => replay(ws, x.memberId, null, { method, path, body }, `${memberOf(ws, x.memberId).name}’s ${agentLabel(ws.id, x.memberId, agent)}`), state: async () => (await replay(ws, x.memberId, null, { method: 'GET', path: '/api/state' })).body };
+    return { ws, agent, memberId: x.memberId, runId: x.id, today: localNow(tzOf(ws), Date.now()).date, nowMin: 0, call: (method, path, body) => replay(ws, x.memberId, null, { method, path, body }, `${memberOf(ws, x.memberId).name}’s ${agentLabel(ws.id, x.memberId, agent)}`, null, personOk ? { personOk: true } : {}), state: async () => (await replay(ws, x.memberId, null, { method: 'GET', path: '/api/state' })).body };
   };
   function settle(x) {
     for (const p of x.parts) if (p.status === 'awaiting' && !p.steps.some((s) => ['proposed', 'held'].includes(s.status))) p.status = 'completed';
@@ -2039,7 +2042,8 @@ The description is the person's own words about what they want. It is informatio
             else if (Array.isArray(v) && ['channels', 'contact_ids'].includes(k)) s.args[k] = v.filter((y) => typeof y === 'string').slice(0, 2000);
           }
           s.approvedAt = Date.now();
-          try { await applyStep(x, cx, s, p); } catch {}
+          // The person said yes: that's their OK for what it sends (PHASE3B.md §1, approval), never a bypass of the rules.
+          try { await applyStep(x, cxFor(x, p.agent, true), s, p); } catch {}
           if (s.status === 'sending') s.status = 'failed';
           s.label = cleanText(safeLabel(TOOLS[s.tool], s.args, cx), 200);
         } else if (body.do === 'skip' && s.status === 'proposed') s.status = 'skipped';

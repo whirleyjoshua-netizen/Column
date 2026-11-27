@@ -40,27 +40,28 @@ export function signoffModule(d) {
   const recName = (at) => String(at.rec.values[at.t.primary] ?? '') || at.t.singular || 'Record';
 
   // The blanks a form can use, from the record as it is now.
-  function blanks(ws, at, day) {
+  // A member's form leaves prices blank (docs/jobflows/PRICES.md): no total, no line prices.
+  function blanks(ws, at, day, view = null) {
     const c = contactOf(at);
     const items = at.t.fields.find((x) => x.type === 'items' && at.rec.values[x.id]?.rows?.length);
     const val = at.t.fields.find((x) => x.key === 'value' && at.rec.values[x.id] != null);
     const addr = at.t.fields.find((x) => x.key === 'address' && at.rec.values[x.id]);
-    const totals = items ? PJ.itemsTotals(at.rec.values[items.id]) : null;
+    const totals = items && view?.prices ? PJ.itemsTotals(at.rec.values[items.id]) : null;
     const out = {
       customer: c ? c.name || c.company || '' : '', customer_email: c?.email || '', customer_phone: c?.phone || '',
       address: (addr && String(at.rec.values[addr.id])) || (c ? [c.address, c.city].filter(Boolean).join(', ') : ''),
       job: recName(at), record: recName(at), project: at.p.name, company: ws.name, team: ws.name, date: day,
-      total: totals ? money(totals.total) : val ? PJ.words(ws, at.p, val, at.rec.values[val.id]) : '',
+      total: totals ? money(totals.total) : val ? PJ.words(ws, at.p, val, at.rec.values[val.id], view) : '',
     };
-    const rows = items ? at.rec.values[items.id].rows.map((r) => ({ desc: r.desc || r.name || '', qty: r.qty ?? '', price: money(r.price || 0), total: money(Math.round((r.qty || 0) * (r.price || 0))) })) : [];
-    return { out, rows, totals };
+    const rows = items ? at.rec.values[items.id].rows.map((r) => ({ desc: r.desc || r.name || '', qty: r.qty ?? '', price: view?.prices ? money(r.price || 0) : '', total: view?.prices ? money(Math.round((r.qty || 0) * (r.price || 0))) : '' })) : [];
+    return { out, rows, totals, view };
   }
   function fill(text, ws, at, b) {
     return String(text || '').replace(/\{([^{}\n]{1,40})\}/g, (_, k) => {
       const key = k.trim().toLowerCase().replace(/\s+/g, '_');
       if (Object.hasOwn(b.out, key)) return b.out[key] || '____';
       const f = at.t.fields.find((x) => x.name.toLowerCase() === k.trim().toLowerCase());
-      if (f && f.type !== 'signature') return PJ.words(ws, at.p, f, at.rec.values[f.id]) || '____';
+      if (f && f.type !== 'signature') return PJ.words(ws, at.p, f, at.rec.values[f.id], b.view) || '____';
       // A blank this list doesn't have prints as a line to fill in by hand.
       return '____';
     });
@@ -85,7 +86,7 @@ export function signoffModule(d) {
   // form its pages first.
   async function render(ws, at, day, auth) {
     const form = formFor(ws, at);
-    const b = blanks(ws, at, day);
+    const b = blanks(ws, at, day, PJ.viewOf(ws.id, auth?.memberId));
     const title = fill(form?.title || form?.name || at.f.name, ws, at, b).slice(0, 160);
     const rows = [[at.t.singular || 'Record', recName(at)], ['Customer', b.out.customer], ['Address', b.out.address], ...(b.out.total ? [['Total', b.out.total]] : [])];
     const lines = linesOf(ws, at, form, b);
@@ -229,7 +230,7 @@ export function signoffModule(d) {
       if (id) at.rec.signForms[at.f.id] = id;
       else delete at.rec.signForms[at.f.id];
       news(at.rec, auth.member);
-      return send(res, 200, PJ.publicRecord(at.rec));
+      return send(res, 200, PJ.publicRecord(at.rec, PJ.viewOf(ws.id, auth.memberId)));
     }
     // What the signer will see, filled in, for signing here.
     if (['preview', 'pdf', 'sign', 'send'].includes(e) && tooMany(auth)) return send(res, 429, { error: 'That’s a lot of forms in a minute. Wait a moment, then try again.' });
@@ -289,7 +290,7 @@ export function signoffModule(d) {
       d.afterSigned(x, item, signer.name);
       save();
       d.signNews(x);
-      return send(res, 200, { record: PJ.publicRecord(at.rec) });
+      return send(res, 200, { record: PJ.publicRecord(at.rec, PJ.viewOf(ws.id, auth.memberId)) });
     }
     // ----- sent to sign online -----
     if (e === 'send') {
@@ -298,6 +299,14 @@ export function signoffModule(d) {
       const signer = signerOf(body, at);
       if (!signer.email) return send(res, 400, { error: 'Add their email address so the link can reach them.' });
       const r = await render(ws, at, day, auth);
+      // Asks first (PHASE3B.md §1): who it goes to and what it says, before any request is made.
+      if (d.sendGate) {
+        const title = r.title || fileName(r).replace(/\.pdf$/i, '');
+        const note = cleanText(body.message, 2000);
+        const pv = { to: signer.name || signer.email, via: 'email', email: signer.email, subject: `Please sign: ${title}`, text: [`${auth.member} at ${ws.name} sent you “${title}” to sign.`, note].filter(Boolean).join('\n') };
+        const gate = d.sendGate(ws, auth, 'sign-send', `${at.rec.id}:${at.f.id}`, pv, d.sha256(JSON.stringify([signer.email, signer.name, note, title])), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
       const kinds = { sig: 'sig', name: 'name', date: 'date', check: 'check' };
       const x = {
         id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, itemId: null, name: fileName(r), title: r.title, signer, message: cleanText(body.message, 2000),
@@ -314,11 +323,17 @@ export function signoffModule(d) {
       news(at.rec, auth.member);
       save();
       d.signNews(x);
-      return send(res, 200, { record: PJ.publicRecord(at.rec), link: d.signLink(x), emailed: via });
+      return send(res, 200, { record: PJ.publicRecord(at.rec, PJ.viewOf(ws.id, auth.memberId)), link: d.signLink(x), emailed: via });
     }
     const x = pending && db.signs[pending.signId];
     if (e === 'remind') {
       if (!open || !x) return send(res, 400, { error: 'There’s nothing waiting to be signed.' });
+      if (d.sendGate) {
+        const title = x.title || x.name.replace(/\.pdf$/i, '');
+        const pv = { to: x.signer.name || x.signer.email, via: 'email', email: x.signer.email, subject: `Reminder: please sign: ${title}`, text: `A reminder: ${auth.member} at ${ws.name} sent you “${title}” to sign.` };
+        const gate = d.sendGate(ws, auth, 'sign-remind', x.id, pv, d.sha256(JSON.stringify([x.signer.email, x.id])), body.confirm);
+        if (gate) return send(res, gate.status, gate.body);
+      }
       const via = await d.emailSignLink(ws, auth, x, true);
       if (!via) return send(res, 502, { error: 'The reminder didn’t send. Copy the link and send it yourself.' });
       save();
@@ -333,7 +348,7 @@ export function signoffModule(d) {
       news(at.rec, auth.member);
       save();
       d.signNews(x);
-      return send(res, 200, { record: PJ.publicRecord(at.rec) });
+      return send(res, 200, { record: PJ.publicRecord(at.rec, PJ.viewOf(ws.id, auth.memberId)) });
     }
     return null;
   }

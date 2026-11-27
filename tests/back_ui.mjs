@@ -1,10 +1,11 @@
+import { CHROME, SERVER_DIR } from './chromebin.mjs';
 import * as FS from 'node:fs';
 import { execSync } from 'node:child_process';
 import WebSocket from '../server/node_modules/ws/index.js';
 import { spawn } from 'node:child_process';
 const S = process.argv[2];
 const APP = 'http://127.0.0.1:4797/';
-const launch = (port, dir) => spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
+const launch = (port, dir) => spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
 const chrome = launch(9362, 'chrome62');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
