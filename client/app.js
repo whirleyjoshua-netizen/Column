@@ -585,6 +585,7 @@
       refreshLinks();
       S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
       buildPanes();
+      dragLost();
       if (C.view.startsWith('ch:') && !channelById(viewChannel(C.view))) C.view = 'chat';
       if (chatOn()) openChannel(C.view);
       else renderChatSide();
@@ -1148,6 +1149,7 @@
     if (amAdmin()) loadHq();
     if (amAdmin() && S.workspace.setup?.pending) { if (!S.ai) api('GET', '/ai').then((x) => (S.ai = x)).catch(() => {}); openSetup(); }
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
+    dragLost();
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Kloomie`;
     applyBrand();
@@ -1423,21 +1425,41 @@
   const viewStack = (v) => (v.startsWith('stack:') ? v.slice(6) : null);
   const viewChannel = (v) => (v.startsWith('ch:') ? v.slice(3) : null);
   const viewThread = (v) => (v.startsWith('th:') ? v.slice(3) : null);
-  const destOf = (v) => (viewThread(v) ? { parentId: viewThread(v) } : { stackId: viewStack(v), channelId: viewChannel(v) });
+  // ---------- one feed, three tabs: All · Chat · Files (docs/jobflows/JOBCHAT.md §1, §8.8) ----------
+  // Every chat feed (#general, a feed, a campaign's, a job's). Files is the feed's own non-message things plus its
+  // stack (#general: everything not in a feed); All is both. The tab is kept per feed on this device.
+  const isFeedView = (v) => v === 'chat' || v.startsWith('ch:');
+  const feedKeyOf = (v) => viewChannel(v) || 'general';
+  const feedTab = (v) => (isFeedView(v) ? store.get('feedTab:' + feedKeyOf(v), 'chat') : null);
+  const feedStackOf = (v) => { const ch = channelById(viewChannel(v)); const st = ch?.stackId && stackById(ch.stackId); return st && st.channelId === ch.id ? st : null; };
+  const destOf = (v) => {
+    if (viewThread(v)) return { parentId: viewThread(v) };
+    // Into Files: the feed's stack (a feed's Files are made before this tab opens; #general's are the team's).
+    if (feedTab(v) === 'files') { const st = feedStackOf(v); return st ? { stackId: st.id, channelId: null } : { stackId: null, channelId: viewChannel(v) }; }
+    return { stackId: viewStack(v), channelId: viewChannel(v) };
+  };
   const isChatView = (v) => v === 'chat' || v.startsWith('ch:') || v.startsWith('th:');
   // Newest at the bottom everywhere, like a chat; anyone can choose newest at the top for Stacks and Files (Settings →
   // General, kept with their account). Chat and replies always read top to bottom.
-  const newestAtBottom = (v) => isChatView(v) || !S.me?.feedTop;
+  // A feed's Files tab follows that choice too (JOBCHAT.md §1); its Chat and All read as a chat.
+  const newestAtBottom = (v) => (isChatView(v) && !(isFeedView(v) && feedTab(v) === 'files')) || !S.me?.feedTop;
 
-  function itemsFor(view) {
+  function itemsFor(view, tab = feedTab(view)) {
     const th = viewThread(view);
     if (th) return S.items.filter((x) => x.id === th || x.parentId === th).sort((a, b) => a.createdAt - b.createdAt);
     const ch = viewChannel(view);
     let list = S.items.filter((x) => (x.channelId || null) === ch && !x.parentId && !x.dirId && !x.underId);
-    if (view === 'files') list = list.filter((x) => x.type !== 'message');
+    if (tab === 'files' || tab === 'all') {
+      // A feed's Files: its own things that aren't messages, then its stack's; All adds the chat. Each once.
+      const chatPart = tab === 'all' ? (ch ? list : list.filter((x) => x.type === 'message')) : [];
+      const st = ch && feedStackOf(view);
+      const fromStack = st ? S.items.filter((x) => x.stackId === st.id && !x.channelId && !x.parentId && !x.dirId && !x.underId) : [];
+      const seen = new Set();
+      list = [...chatPart, ...list.filter((x) => x.type !== 'message'), ...fromStack].filter((x) => !seen.has(x.id) && seen.add(x.id));
+    } else if (view === 'files') list = list.filter((x) => x.type !== 'message');
     else if (view === 'chat') list = list.filter((x) => x.type === 'message');
     else if (view.startsWith('stack:')) list = list.filter((x) => x.stackId === viewStack(view));
-    list = [...list].sort((a, b) => a.createdAt - b.createdAt);
+    list = [...list].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     return newestAtBottom(view) ? list : list.reverse();
   }
 
@@ -1486,8 +1508,10 @@
     if (k === 'sealed') return 'sealed';
     return it.type === 'file' || it.type === 'folder' ? 'files' : null;
   }
+  // A feed's Files tab has its own filters; its Chat and All tabs none (as before).
+  const pfKey = (pane) => (isFeedView(pane._view) ? (feedTab(pane._view) === 'files' ? pane._view + '#files' : null) : pane._view);
   function paneFiltered(view, items) {
-    const f = PF[view];
+    const f = view && PF[view];
     if (!f) return items;
     const q = f.q.trim().toLowerCase();
     return items.filter((it) => (f.kind === 'all' || filterOf(it) === f.kind)
@@ -1495,7 +1519,7 @@
   }
   function filterBar(pane) {
     const view = pane._view;
-    const f = (PF[view] ||= { kind: 'all', q: '' });
+    const f = (PF[pfKey(pane) || view] ||= { kind: 'all', q: '' });
     const chips = h('div', { class: 'pf-chips' });
     const q = h('input', { type: 'search', class: 'pf-q', placeholder: 'Search', value: f.q, 'aria-label': 'Search this stack' });
     q.addEventListener('input', () => { f.q = q.value; renderPane(pane); });
@@ -1543,7 +1567,7 @@
       ta.style.height = '';
       drawTray();
       try {
-        await api('POST', '/items', { type: chat || view === 'all' ? 'message' : 'text', text: sent.length ? body : text, ...destOf(view) });
+        await api('POST', '/items', { type: (chat && feedTab(view) !== 'files') || view === 'all' ? 'message' : 'text', text: sent.length ? body : text, ...destOf(view) });
       } catch (e) {
         ta.value = text;
         links.push(...sent);
@@ -1610,8 +1634,9 @@
     const view = pane._view;
     const list = pane._list;
     pane._drawFilters?.();
-    const items = paneFiltered(view, itemsFor(view));
-    const uploads = view === 'chat' || viewThread(view) ? [] : [...S.uploads.values()].filter((u) => !u.dirId && (u.channelId || null) === viewChannel(view) && (!viewStack(view) || u.stackId === viewStack(view)));
+    const items = paneFiltered(pfKey(pane), itemsFor(view));
+    const fst = feedTab(view) === 'files' && feedStackOf(view);
+    const uploads = (view === 'chat' && !fst) || viewThread(view) ? [] : [...S.uploads.values()].filter((u) => !u.dirId && (((u.channelId || null) === viewChannel(view) && (!viewStack(view) || u.stackId === viewStack(view))) || (fst && u.stackId === fst.id && !u.channelId)));
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
 
     const want = [];
@@ -2565,7 +2590,11 @@
   const skDropAt = (target) => S.token && SKD.open && SKD.view === 'plan' && SK.open && target?.closest?.('#skDock');
   // An open campaign takes the drop itself: files go to its stack, and lists become call lists.
   const dropCampaign = () => campsShown() && campById(K.open);
+  // A drag over a feed that just went away (a job taken from you, by its record:gone or the reload): it lands nowhere.
+  const dragLost = () => { if (dragDepth > 0 && S.dragFeed?.startsWith('ch:') && !channelById(viewChannel(S.dragFeed))) S.dragCancelled = true; };
   window.addEventListener('dragenter', (e) => {
+    if (S.token && dragDepth === 0) S.dragCancelled = false; // a new drag from outside the window
+    S.dragFeed = paneAt(e.target)?._view || null; // where it's over now: a job chat lost mid-drag cancels it (jbGone)
     if (S.internalDrag || !S.token) return;
     if (S.tab === 'day' && hasFiles(e.dataTransfer) && !skDropAt(e.target) && splitOpen !== 'column') openStacks();
     dragDepth++;
@@ -2624,6 +2653,8 @@
     e.preventDefault();
     dragDepth = 0;
     clearDropping();
+    // Over a job's chat when the job was taken away (JOBCHAT.md §8.14): the drop goes nowhere.
+    if (S.dragCancelled) { S.dragCancelled = false; S.internalDrag = false; S.dragItem = null; return toast('You no longer have that job, so nothing was added.'); }
     document.querySelectorAll('.task-row.file-over').forEach((x) => x.classList.remove('file-over'));
     document.querySelectorAll('#tool .dir-over').forEach((x) => x.classList.remove('dir-over'));
     if (skDropAt(e.target)) {
@@ -11286,9 +11317,10 @@
   }
   const unreadAt = (view) => unreadItems(view).some(mentionsMe);
   function markRead() {
-    if (!chatOn() || document.hidden) return;
+    if (!chatOn() || document.hidden) return jbChatBadges();
     C.lastRead[C.view] = Date.now();
     store.set('lastRead', C.lastRead);
+    jbChatBadges();
   }
   function chatChanged() {
     markRead();
@@ -11306,7 +11338,8 @@
         C.title,
         h('button', { class: 'icon-btn ch-search', title: 'Search  (⌘K)', 'aria-label': 'Search', html: I.search, onclick: () => openPalette() })
       ),
-      (C.pinbar = h('div', { class: 'ch-pins', 'aria-label': 'Pinned to this chat' }))
+      (C.pinbar = h('div', { class: 'ch-pins', 'aria-label': 'Pinned to this chat' })),
+      (C.tabs = h('div', { class: 'ch-tabs', role: 'tablist', 'aria-label': 'Show' }))
     );
     root.append(C.side, h('div', { class: 'ch-scrim', onclick: () => root.classList.remove('side-open') }), C.main);
   }
@@ -11322,19 +11355,51 @@
       const pane = h('section', { class: 'pane chat-pane', 'data-i': 'c' });
       pane._view = view;
       pane._cards = new Map();
-      pane._list = h('div', { class: 'list bottom' });
+      pane._list = h('div', { class: 'list' + (newestAtBottom(view) ? ' bottom' : '') });
       pane.append(pane._list, composer(pane));
+      if (feedTab(view) === 'files') pane.insertBefore(filterBar(pane), pane._list);
       C.main.append(pane);
       C.pane = pane;
       renderPane(pane, true);
     }
     const ch = channelById(viewChannel(view));
-    C.title.replaceChildren(h('span', { class: 'hash' }, '#'), ch ? ch.name : 'general');
+    C.title.replaceChildren(...[h('span', { class: 'hash' }, '#'), ch ? ch.name : 'general', ch?.archived ? h('small', { class: 'ch-archived' }, ' · archived') : ''].filter(Boolean));
+    drawFeedTabs();
     drawChatPins();
     $('#chat').classList.remove('side-open');
     if (S.me?.pins?.length) markTabs();
     checkThread();
     chatChanged();
+  }
+
+  function drawFeedTabs() {
+    if (!C.tabs) return;
+    const on = feedTab(C.view || 'chat');
+    C.tabs.replaceChildren(...[['all', 'All'], ['chat', 'Chat'], ['files', 'Files']].map(([k, label]) =>
+      h('button', { type: 'button', role: 'tab', class: 'ch-tab' + (k === on ? ' on' : ''), 'aria-selected': String(k === on), 'data-ft': k, onclick: () => setFeedTab(k) }, label)));
+  }
+  async function setFeedTab(k) {
+    const v = C.view || 'chat';
+    const ch = channelById(viewChannel(v));
+    // A feed's Files: its stack, made the first time (the server makes one, however many ask).
+    if (k === 'files' && ch && !feedStackOf(v)) {
+      try {
+        const y = await api('POST', `/channels/${ch.id}/stack`);
+        ch.stackId = y.stack.id;
+        if (!stackById(y.stack.id)) S.workspace.stacks = [...S.workspace.stacks, y.stack];
+      } catch (e) { return toast(e.message); }
+    }
+    store.set('feedTab:' + feedKeyOf(v), k);
+    const pane = C.pane;
+    if (!pane) return drawFeedTabs();
+    pane._cards.clear();
+    pane._list.replaceChildren();
+    pane._list.classList.toggle('bottom', newestAtBottom(v));
+    pane.querySelector('.pf')?.remove();
+    pane._drawFilters = null;
+    if (k === 'files') pane.insertBefore(filterBar(pane), pane._list);
+    drawFeedTabs();
+    renderPane(pane, true);
   }
 
   // Thread panel beside the feed (over it when narrow). Its pane renders like any other.
@@ -18860,6 +18925,23 @@
   const jbSoon = () => { clearTimeout(jbSoonT); jbSoonT = setTimeout(() => { JB.ov = null; JB.clients = null; JB.wk = null; if (toolOpen === 'jobs' && !JB.edit) jbLoad(true); else JB.jobs = null; }, 400); };
   // A job this person no longer may see (PHASE5.md §5): out of everything the app holds, and its window closed.
   function jbGone(msg) {
+    // Its chat goes too (JOBCHAT.md §8.14): closed if it's open, its feed, stack and their things out of the app, and
+    // a drag from or into it dropped.
+    const feed = S.workspace?.channels.find((c) => c.recordId === msg.id) || ((JB.jobs || []).find((j) => j.id === msg.id)?.chatId && { id: JB.jobs.find((j) => j.id === msg.id).chatId });
+    if (feed) {
+      const sid = feed.stackId || S.workspace.stacks.find((x) => x.channelId === feed.id)?.id;
+      const inIt = (x) => { const top = x.parentId ? S.items.find((y) => y.id === x.parentId) || x : x; return top.channelId === feed.id || (!!sid && top.stackId === sid); };
+      if (S.dragItem?.it && inIt(S.dragItem.it)) { S.dragItem = null; S.internalDrag = false; }
+      if (dragDepth > 0 && S.dragFeed === 'ch:' + feed.id) S.dragCancelled = true;
+      dragLost();
+      S.items = S.items.filter((x) => !inIt(x));
+      S.workspace.channels = S.workspace.channels.filter((c) => c.id !== feed.id);
+      if (sid) S.workspace.stacks = S.workspace.stacks.filter((x) => x.id !== sid);
+      if (C.view === 'ch:' + feed.id) { C.view = 'chat'; if (C.side) openChannel('chat'); }
+      if (C.shelf && viewStack(C.shelf._view) === sid) closeShelf();
+      renderChatSide();
+      render();
+    }
     if (PR.records.has(msg.projectId)) PR.records.set(msg.projectId, prRecs(msg.projectId).filter((x) => x.id !== msg.id));
     if (JB.jobs) JB.jobs = JB.jobs.filter((j) => j.id !== msg.id);
     JB.runs.delete(msg.id); PR.visits?.delete?.(msg.id); PR.logs.delete(msg.id);
@@ -19049,7 +19131,56 @@
       // The step it's at: a button that does it for whoever may (as Next on the job), otherwise only its name.
       r?.current && jbMayNext({ ...r.current, state: 'current' }) ? h('button', { type: 'button', class: 'btn small jb-next', 'data-next': j.id, title: 'Open the job at this step', onclick: () => jbGo(j.projectId, j.id) }, `${JB_KIND[r.current.kind]?.[0] || ''} ${r.current.name}`)
         : r?.current ? h('small', { class: 'muted jb-at', 'data-at': j.id }, `Next: ${r.current.name}`)
-          : r?.status === 'done' ? h('span', { class: 'jb-done' }, '✓ Done') : null);
+          : r?.status === 'done' ? h('span', { class: 'jb-done' }, '✓ Done') : null,
+      jbChatBtn(j));
+  }
+  // ---------- a job's chat (docs/jobflows/JOBCHAT.md §4) ----------
+  // 💬 on a job's row, page and card, with the chat's unread count (@ when someone mentioned you). It opens the job's
+  // chat beside the job; one made on demand when the job has none yet; an archived one fetched with its items.
+  const jbChatOff = () => !amAdmin() && S.workspace?.memberAccess?.chat === false;
+  function jbChatCount(chatId) {
+    const v = 'ch:' + chatId;
+    return chatId && channelById(chatId) ? { n: unread(v), at: unreadAt(v) } : { n: 0, at: false };
+  }
+  function jbChatBtn(x) {
+    if (!x || !S.workspace) return null;
+    const { n, at } = jbChatCount(x.chatId);
+    return h('button', { type: 'button', class: 'btn small jb-chat', 'data-chat': x.chatId || '', 'data-job': x.id, title: jbChatOff() ? 'Chat is off for members' : 'The job’s chat and files', 'aria-label': 'Open the job’s chat', onclick: (e) => { e.stopPropagation(); jbOpenChat(x.id, x.chatId); } },
+      '💬', n ? h('span', { class: 'jb-chat-n' + (at ? ' at' : '') }, (at ? '@' : '') + (n > 99 ? '99+' : String(n))) : null);
+  }
+  function jbChatBadges() {
+    document.querySelectorAll('.jb-chat[data-chat]').forEach((b) => {
+      const id = b.dataset.chat;
+      if (!id) return;
+      const { n, at } = jbChatCount(id);
+      let s = b.querySelector('.jb-chat-n');
+      if (!n) return s?.remove();
+      if (!s) b.append((s = h('span', { class: 'jb-chat-n' })));
+      s.classList.toggle('at', at);
+      s.textContent = (at ? '@' : '') + (n > 99 ? '99+' : String(n));
+    });
+  }
+  async function jbOpenChat(id, chatId, tab) {
+    if (jbChatOff()) return toast('Chat is off for members.');
+    try {
+      let ch = chatId && channelById(chatId);
+      if (!ch) {
+        let y = await api('GET', `/jobs/${id}/chat`);
+        if (!y.feed) y = { feed: (await api('POST', `/jobs/${id}/chat`)).feed, items: [] };
+        const feed = y.feed;
+        // An archived chat isn't in the workspace: shown until the next change brings the workspace again.
+        if (!channelById(feed.id)) S.workspace.channels = [...S.workspace.channels, { ...feed }];
+        if (feed.stackId && !stackById(feed.stackId)) S.workspace.stacks = [...S.workspace.stacks, { id: feed.stackId, name: feed.name, channelId: feed.id, recordId: id }];
+        for (const it of y.items || []) upsert(it);
+        for (const j of JB.jobs || []) if (j.id === id) j.chatId = feed.id;
+        ch = channelById(feed.id);
+      }
+      if (tab) store.set('feedTab:' + ch.id, tab);
+      // Beside the job: in the split, whatever page was last (pages, not pop-ups; the split is a sheet on a phone).
+      if (splitOpen !== 'chat') openSplit('chat');
+      openChannel('ch:' + ch.id);
+      if (tab && C.pane?._view === 'ch:' + ch.id) setFeedTab(tab);
+    } catch (e) { toast(e.message); }
   }
   // Open a job and do the step it's at.
   async function jbGo(projectId, id) {
@@ -19139,9 +19270,9 @@
   }
   // A job's files (PHASE4.md §1): its own stack, opened; an owner or admin makes it the first time.
   async function jbFiles(r) {
-    if (r.stackId && stackById(r.stackId)) return showStack(r.stackId);
-    if (!amAdmin()) return toast('This job has no files stack yet. An owner or admin can add one.');
-    try { const y = await api('POST', `/jobs/${r.id}/stack`); r.stackId = y.stack.id; setTimeout(() => showStack(y.stack.id), 300); } catch (e) { toast(e.message); }
+    // The job's files are its chat's Files now (JOBCHAT.md §4): an older job with a stack and no chat gets its chat,
+    // linked to that stack, by the server (or a clear answer if the stack is bound elsewhere).
+    return jbOpenChat(r.id, r.chatId, 'files');
   }
   // Pin the job to a chat (PHASE4.md §4): whoever can see the job there sees its name and the step it's at.
   function jbPinToChat(r) {
@@ -19286,10 +19417,10 @@
     if (!JB.runs.has(r.id)) { jbFetchRun(r.id); return null; }
     const run = JB.runs.get(r.id);
     if (!run) {
-      if (!amAdmin()) return null;
+      if (!amAdmin()) return r.chatId ? h('div', { class: 'jb-card jb-none' }, h('small', { class: 'muted' }, 'Not on a job flow.'), jbChatBtn(r)) : null;
       if (!JB.flows) { jbLoad(); return null; }
       const fit = JB.flows.filter((f) => f.version && !f.archived && f.version.body.list.projectId === p.id && f.version.body.list.typeId === t.id);
-      return fit.length ? h('div', { class: 'jb-card jb-none' }, h('small', { class: 'muted' }, 'Not on a job flow.'), h('button', { class: 'btn small', 'data-act': 'put-on', onclick: () => jbPutOn(r, fit) }, 'Put on a flow'), h('button', { class: 'btn small', 'data-act': 'files', onclick: () => jbFiles(r) }, '📁 Files')) : null;
+      return h('div', { class: 'jb-card jb-none' }, h('small', { class: 'muted' }, 'Not on a job flow.'), fit.length ? h('button', { class: 'btn small', 'data-act': 'put-on', onclick: () => jbPutOn(r, fit) }, 'Put on a flow') : null, h('button', { class: 'btn small', 'data-act': 'files', onclick: () => jbFiles(r) }, '📁 Files'), jbChatBtn(r));
     }
     const cur = run.steps.find((x) => x.state === 'current');
     const pickId = run.steps.some((x) => x.id === JB.pick[r.id]) ? JB.pick[r.id] : cur?.id || run.steps.at(-1)?.id;
@@ -19342,7 +19473,7 @@
     if (admin && !JB.flows) jbLoad();
     return h('div', { class: 'jb-card', 'data-run': run.id },
       h('div', { class: 'jb-ch' }, h('b', {}, `${run.icon || '🧰'} ${run.flowName}`), h('small', { class: 'muted' }, run.status === 'done' ? '✓ Every step done' : `${run.done} of ${run.total} done`),
-        h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((run.done / Math.max(1, run.total)) * 100)}%` })), files, menu),
+        h('span', { class: 'lead-bar', style: '--c:var(--accent)' }, h('i', { style: `width:${Math.round((run.done / Math.max(1, run.total)) * 100)}%` })), files, jbChatBtn(r), menu),
       run.gearLine ? h('small', { class: 'jb-gearline', 'data-gear': '1' }, '🧰 ' + run.gearLine) : null,
       steps, detail);
   }

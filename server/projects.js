@@ -343,7 +343,7 @@ export const TEMPLATES = {
   },
 };
 
-export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null, jobQuote = () => null, seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '', docsOf = null, bizHtml = () => '', inkedPng = () => null }) {
+export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null, jobQuote = () => null, seesLinked = () => true, proofUrl = () => null, onEvent = null, onPrice = () => {}, canSeeItem = () => true, seal = (x) => x, unseal = (x) => x, db, save, broadcast, rid, hold = null, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, makeTask, onRecords, onRecordGone, onRecordNews, onMade = () => {}, stageGate = null, allowLocalHooks = false, qrSvg = null, publicUrl = '', docsOf = null, bizHtml = () => '', inkedPng = () => null }) {
   const bad = (msg) => badRequest(msg);
   db.projects ||= {};
   db.records ||= {};
@@ -408,7 +408,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     for (const id of was) if (!now.has(id)) broadcast(rec.wsId, { type: 'record:gone', id: rec.id, projectId: rec.projectId, forMember: id });
     for (const id of now) if (!was.has(id)) broadcast(rec.wsId, { type: 'record', record: publicRecord(rec, viewOf(rec.wsId, id)), forMember: id, gained: true });
     // The job's files stack is in the app's state: whoever gained or lost the job loads again, so it comes or goes too.
-    if (rec.stackId) for (const id of new Set([...was, ...now])) if (was.has(id) !== now.has(id)) broadcast(rec.wsId, { type: 'resync', forMember: id });
+    if (rec.stackId || rec.chatId) for (const id of new Set([...was, ...now])) if (was.has(id) !== now.has(id)) broadcast(rec.wsId, { type: 'resync', forMember: id });
   }
   // A new job's seers, noted without telling anyone (the record's own broadcast already reached them).
   const noteSeers = (rec) => { const p = db.projects[rec.projectId]; if (isJobT(p && typeOf(p, rec.typeId))) jobSeers.set(rec.id, seersNow(rec)); };
@@ -512,7 +512,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     const { share, answer, ...rest } = rec;
     return { ...rest, values: redactValues(p, t, rec.values || {}, view).values, log: (rec.log || []).map((e) => redactEntry(p, t, e)), ...(answer ? { answer: { act: answer.act, name: answer.name, reason: answer.reason, at: answer.at, method: answer.method } } : {}) };
   }
-  const publicRecord = ({ wsId, log, secrets, flowStage, stages, ...r }, view = null) => {
+  const publicRecord = ({ wsId, log, secrets, flowStage, stages, chatBroken, ...r }, view = null) => {
     const p = db.projects[r.projectId];
     const t = p?.types.find((x) => x.id === r.typeId);
     if (p && t && t.fields.some((f) => CALC.has(f.type))) r = { ...r, values: { ...r.values, ...calcValues(p, t, { ...r, wsId }) } };
@@ -1325,6 +1325,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     broadcast(p.wsId, { type: 'project', project: publicProject(p), projectId: p.id });
   }
   function recordNews(rec, event, by) {
+    if (event === 'record.created') onMade(rec); // a job's chat, before anyone hears of the job (JOBCHAT.md §3, §8.13)
     onRecordNews?.(rec);
     recordsChanged(rec.projectId);
     save();
@@ -1709,6 +1710,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
             } else {
               rec = newRecord(ws, p, t, auth, row, null, { addChoices: true });
               if (match && rec.values[match.id] != null) index.set(String(rec.values[match.id]).toLowerCase(), rec);
+              onMade(rec); // the bulk import doesn't go through recordNews: its jobs get their chats here (JOBCHAT.md §8.13)
               broadcast(rec.wsId, { type: 'record', record: publicRecord(rec), projectId: p.id });
               hooksFire(rec, 'record.created', auth.member);
               added++;

@@ -5205,6 +5205,16 @@ body:not(.wide) .cc-phases { padding: 12px 10px; }
 .jw-visit span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .tm-jobs-link { margin: 4px 0 8px; }
 
+/* One feed, three tabs (docs/jobflows/JOBCHAT.md §1) and a job's 💬 (§4). */
+.ch-tabs { display: flex; gap: 2px; padding: 4px 10px; border-bottom: 1px solid var(--line); flex: none; }
+.ch-tab { background: none; border: 0; border-radius: 6px; padding: 4px 10px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.ch-tab:hover { background: var(--card-hover); color: var(--text); }
+.ch-tab.on { background: var(--card-hover); color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+.ch-title .ch-archived { color: var(--muted); font-weight: 500; }
+.chat-pane > .pf { padding: 6px 10px 0; }
+.jb-chat { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.jb-chat-n { background: var(--accent); color: #fff; border-radius: 999px; font-size: 10px; font-weight: 700; padding: 1px 6px; }
+.jb-chat-n.at { background: #f5b942; color: #1a1a1a; }
 /* Settings → Website (websites.js): your site, a request moving along, packages to pick, and Kloomie staff's list. */
 .web-sec h4, .web-ask h4 { margin: 16px 0 6px; font-size: 13px; }
 .web-own a { font-weight: 600; }

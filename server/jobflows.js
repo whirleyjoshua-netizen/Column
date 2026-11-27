@@ -622,6 +622,7 @@ export function jobFlowsModule(ctx) {
           run: run ? summary(ws, auth, run) : null,
           ...(isAdmin(auth) && itemsField(t) ? { total: itemsTotals(rec.values[itemsField(t).id]).total || 0 } : {}),
           legacy: !activeRun(rec.id) && Object.values(db.campaigns).some((c) => !isJobRun(c) && c.recordId === rec.id),
+          chatId: rec.chatId || null,
           updatedAt: rec.updatedAt,
         });
         if (out.length >= 2000) break;
@@ -805,6 +806,7 @@ export function jobFlowsModule(ctx) {
       if (g?.step.kind === 'review') makePending(run.c, g, { kind: 'review' });
     } catch (e) { console.error('A moved job’s waiting message couldn’t be made:', e.message); }
     try { note(rec, `Moved onto the flow “${flow.name}” at “${last ? 'the end (done)' : steps[at].name}”`, auth.member); } catch (e) { console.error('A moved job’s timeline note couldn’t be written:', e.message); }
+    try { ctx.jobChat?.made(rec); } catch (e) { console.error('A moved job’s chat couldn’t be made:', e.message); } // JOBCHAT.md §3
     return run;
   }
   // What a step stands for, on the record as it is (the move's own check, before the run is kept).
@@ -1129,6 +1131,13 @@ export function jobFlowsModule(ctx) {
       if (m !== 'GET') res.once('finish', () => { if (res.statusCode < 300) wake(rec.id); });
       if (c === 'run' && m === 'GET') return send(res, 200, { run: runView(ws, auth, shownRun(rec.id)) });
       // A job's stack for its files (PHASE4.md §1): one, made by an owner or admin, flow or not.
+      // The job's own chat (docs/jobflows/JOBCHAT.md §3, §8.11): the job's visibility first (jobAt, above: 404),
+      // then the member Chat switch (403). POST makes it if it isn't there yet (one turn); GET has it, archived or not.
+      if (c === 'chat' && !d && (m === 'GET' || m === 'POST')) {
+        if (!memberMay(ws, auth, 'chat')) return send(res, 403, { error: 'Chat is off for members.' });
+        if (m === 'POST') { const feed = ctx.jobChat.ensure(ws, rec); return feed ? send(res, 200, { feed }) : send(res, 409, { error: 'This job’s chat and files are linked to something else. Ask an owner to look.' }); }
+        return send(res, 200, ctx.jobChat.get(ws, auth, rec));
+      }
       if (c === 'stack' && m === 'POST' && !d) {
         if (!admin) return send(res, 403, { error: 'Only owners and admins make a job’s files stack.' });
         return send(res, 200, { stack: ensureStack(ws, rec) });
@@ -1888,5 +1897,5 @@ export function jobFlowsModule(ctx) {
     }
   }
 
-  return { currentWho, reseeRuns, wake, tasksSweep, route, linksSweep, mapJobs, pinInfo, isJobRecord, campaignGone, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
+  return { ensureStack, shownRun, currentWho, reseeRuns, wake, tasksSweep, route, linksSweep, mapJobs, pinInfo, isJobRecord, campaignGone, stepMet, activeRun, isJobRun, isJobList, runsOf, bindInvoice, dropFor, tell, runView, autoBill, autoMessages, invoiceNews, dueDaysFor, jobQuote, priceListItems, itemPrice };
 }
