@@ -96,6 +96,33 @@ try {
   await A.until(`!!${CHAT}?.querySelector('.ch-row')`, 10000);
   await A.ev(`[...${CHAT}.querySelectorAll('.ch-row')].find((r) => /yard/.test(r.textContent))?.click(); true`);
   ok(await A.until(`!!${CHAT}?.querySelector('.ch-tabs [data-ft=files].on') && ${listText}.includes('YARDNOTE') && !${listText}.includes('YARDMSG')`), 'after a reload the feed opens on Files again');
+  // Newest at the top (Settings → General) applies to Files; Chat still reads top to bottom.
+  await rico('PUT', '/account/feed', { newestTop: true });
+  await A.ev(`location.reload(); true`);
+  await A.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#settingsBtn')`, 20000);
+  await A.tap(`document.querySelector('#tabs [data-tab=chat]')`);
+  await A.until(`!!${CHAT}?.querySelector('.ch-row')`, 10000);
+  await A.ev(`[...(${CHAT}?.querySelectorAll('.ch-row') || [])].find((r) => /yard/.test(r.textContent))?.click(); true`);
+  ok(await A.until(`${listText}.includes('yardfile.txt') && ${listText}.indexOf('yardfile.txt') < ${listText}.indexOf('YARDNOTE')`), 'with newest at the top chosen, Files shows the newest first');
+  await A.tap(`${CHAT}.querySelector('.ch-tabs [data-ft=chat]')`);
+  ok(await A.until(`${listText}.includes('inchat.txt') && ${listText}.indexOf('YARDMSG') < ${listText}.indexOf('inchat.txt')`), 'and Chat still reads top to bottom');
+  await rico('PUT', '/account/feed', { newestTop: false });
+
+  // An older job with a stack and no chat: its 📁 Files opens (and makes) its chat, on Files, with the stack's things.
+  await rico('PATCH', '/workspace', { jobChats: false });
+  const oldJob = await rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Older gutter job' } });
+  const oldSt = (await rico('POST', `/jobs/${oldJob.id}/stack`))?.stack;
+  await rico('POST', '/items', { type: 'text', text: 'OLDSTACKNOTE gutter photos', stackId: oldSt?.id });
+  await rico('PATCH', '/workspace', { jobChats: true });
+  await A.ev(`document.querySelector('#workTabs [data-tab=jobs]').click(); true`);
+  await A.until(`!!document.querySelector('#tool [data-jb=jobs]')`, 10000);
+  await A.ev(`document.querySelector('#tool [data-jb=jobs]').click(); true`);
+  await A.tap(TOOL(`.jb-row[data-job="${oldJob.id}"] .jb-main`));
+  await A.tap(`document.querySelector('#projects .jb-card [data-act=files]')`);
+  ok(await A.until(`!!${CHAT} && /older-gutter-job/.test(${CHAT}.querySelector('.ch-title')?.textContent || '') && !!${CHAT}.querySelector('.ch-tabs [data-ft=files].on') && ${listText}.includes('OLDSTACKNOTE')`, 10000), 'an older job’s 📁 Files opens its new chat on Files, with what was in its stack');
+  st = await rico('GET', '/state');
+  ok(st.workspace.channels.find((c) => c.recordId === oldJob.id)?.stackId === oldSt?.id, 'its chat took the stack it had');
+  await A.tap(`document.querySelector('#projects .pr-close, #projects [aria-label="Close"]')`);
 
   // A new job: 💬 on its row, opening its chat beside it.
   const job = await rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Porch wash', crew: samId } });
@@ -139,7 +166,7 @@ try {
   await sleep(1500);
   st = await rico('GET', '/state');
   const stale = await rico('GET', `/jobs/${job.id}/chat`);
-  ok(!JSON.stringify(stale?.items || []).includes('stale.txt') && !st.items.some((x) => x.name === 'stale.txt' && (x.stackId === jf?.stackId || x.channelId === jf?.id)), 'the drag that was going lands nowhere in the job’s chat');
+  ok(!JSON.stringify(stale?.items || []).includes('stale.txt') && !st.items.some((x) => x.name === 'stale.txt'), 'the drag that was going lands nowhere: not in the job’s chat, not in #general, not anywhere');
   ok(!A.errors.length && !B.errors.length, 'no errors on the page: ' + [...A.errors, ...B.errors].join(' | ').slice(0, 400));
 } catch (e) {
   ok(false, 'threw: ' + (e.stack || e));

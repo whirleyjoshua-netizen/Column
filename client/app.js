@@ -585,6 +585,7 @@
       refreshLinks();
       S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
       buildPanes();
+      dragLost();
       if (C.view.startsWith('ch:') && !channelById(viewChannel(C.view))) C.view = 'chat';
       if (chatOn()) openChannel(C.view);
       else renderChatSide();
@@ -1147,6 +1148,7 @@
     if (amAdmin()) loadHq();
     if (amAdmin() && S.workspace.setup?.pending) { if (!S.ai) api('GET', '/ai').then((x) => (S.ai = x)).catch(() => {}); openSetup(); }
     S.panes = S.panes.map((v) => (v.startsWith('stack:') && !stackById(v.slice(6)) ? 'files' : v));
+    dragLost();
     $('#wsName').textContent = S.workspace.name;
     document.title = `${S.workspace.name} · Kloomie`;
     applyBrand();
@@ -1438,7 +1440,8 @@
   const isChatView = (v) => v === 'chat' || v.startsWith('ch:') || v.startsWith('th:');
   // Newest at the bottom everywhere, like a chat; anyone can choose newest at the top for Stacks and Files (Settings →
   // General, kept with their account). Chat and replies always read top to bottom.
-  const newestAtBottom = (v) => isChatView(v) || !S.me?.feedTop;
+  // A feed's Files tab follows that choice too (JOBCHAT.md §1); its Chat and All read as a chat.
+  const newestAtBottom = (v) => (isChatView(v) && !(isFeedView(v) && feedTab(v) === 'files')) || !S.me?.feedTop;
 
   function itemsFor(view, tab = feedTab(view)) {
     const th = viewThread(view);
@@ -2586,7 +2589,11 @@
   const skDropAt = (target) => S.token && SKD.open && SKD.view === 'plan' && SK.open && target?.closest?.('#skDock');
   // An open campaign takes the drop itself: files go to its stack, and lists become call lists.
   const dropCampaign = () => campsShown() && campById(K.open);
+  // A drag over a feed that just went away (a job taken from you, by its record:gone or the reload): it lands nowhere.
+  const dragLost = () => { if (dragDepth > 0 && S.dragFeed?.startsWith('ch:') && !channelById(viewChannel(S.dragFeed))) S.dragCancelled = true; };
   window.addEventListener('dragenter', (e) => {
+    if (S.token && dragDepth === 0) S.dragCancelled = false; // a new drag from outside the window
+    S.dragFeed = paneAt(e.target)?._view || null; // where it's over now: a job chat lost mid-drag cancels it (jbGone)
     if (S.internalDrag || !S.token) return;
     if (S.tab === 'day' && hasFiles(e.dataTransfer) && !skDropAt(e.target) && splitOpen !== 'column') openStacks();
     dragDepth++;
@@ -2645,6 +2652,8 @@
     e.preventDefault();
     dragDepth = 0;
     clearDropping();
+    // Over a job's chat when the job was taken away (JOBCHAT.md §8.14): the drop goes nowhere.
+    if (S.dragCancelled) { S.dragCancelled = false; S.internalDrag = false; S.dragItem = null; return toast('You no longer have that job, so nothing was added.'); }
     document.querySelectorAll('.task-row.file-over').forEach((x) => x.classList.remove('file-over'));
     document.querySelectorAll('#tool .dir-over').forEach((x) => x.classList.remove('dir-over'));
     if (skDropAt(e.target)) {
@@ -11207,7 +11216,7 @@
       const pane = h('section', { class: 'pane chat-pane', 'data-i': 'c' });
       pane._view = view;
       pane._cards = new Map();
-      pane._list = h('div', { class: 'list bottom' });
+      pane._list = h('div', { class: 'list' + (newestAtBottom(view) ? ' bottom' : '') });
       pane.append(pane._list, composer(pane));
       if (feedTab(view) === 'files') pane.insertBefore(filterBar(pane), pane._list);
       C.main.append(pane);
@@ -11246,6 +11255,7 @@
     if (!pane) return drawFeedTabs();
     pane._cards.clear();
     pane._list.replaceChildren();
+    pane._list.classList.toggle('bottom', newestAtBottom(v));
     pane.querySelector('.pf')?.remove();
     pane._drawFilters = null;
     if (k === 'files') pane.insertBefore(filterBar(pane), pane._list);
@@ -18702,6 +18712,8 @@
       const sid = feed.stackId || S.workspace.stacks.find((x) => x.channelId === feed.id)?.id;
       const inIt = (x) => { const top = x.parentId ? S.items.find((y) => y.id === x.parentId) || x : x; return top.channelId === feed.id || (!!sid && top.stackId === sid); };
       if (S.dragItem?.it && inIt(S.dragItem.it)) { S.dragItem = null; S.internalDrag = false; }
+      if (dragDepth > 0 && S.dragFeed === 'ch:' + feed.id) S.dragCancelled = true;
+      dragLost();
       S.items = S.items.filter((x) => !inIt(x));
       S.workspace.channels = S.workspace.channels.filter((c) => c.id !== feed.id);
       if (sid) S.workspace.stacks = S.workspace.stacks.filter((x) => x.id !== sid);
@@ -19038,9 +19050,9 @@
   }
   // A job's files (PHASE4.md §1): its own stack, opened; an owner or admin makes it the first time.
   async function jbFiles(r) {
-    // The job's files are its chat's Files now (JOBCHAT.md §4).
-    if (r.chatId || !r.stackId) return jbOpenChat(r.id, r.chatId, 'files');
-    if (r.stackId && stackById(r.stackId)) return showStack(r.stackId);
+    // The job's files are its chat's Files now (JOBCHAT.md §4): an older job with a stack and no chat gets its chat,
+    // linked to that stack, by the server (or a clear answer if the stack is bound elsewhere).
+    return jbOpenChat(r.id, r.chatId, 'files');
     if (!amAdmin()) return toast('This job has no files stack yet. An owner or admin can add one.');
     try { const y = await api('POST', `/jobs/${r.id}/stack`); r.stackId = y.stack.id; setTimeout(() => showStack(y.stack.id), 300); } catch (e) { toast(e.message); }
   }

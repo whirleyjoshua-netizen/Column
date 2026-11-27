@@ -266,3 +266,4 @@ someone on the job, nothing for a member who isn't). §8.9 corrected: the app's 
 - Tests: jobchat_ui.mjs passes; chat_tab_ui, tools_chat_ui, stacks_bottom_ui, pinsplit_ui, chatpanelsui, chatpinsui,
   camp_builder_ui, campaign_views_ui, mobile_shell_ui, jobs_ui, jobs_tab_ui, member_access_ui pass; dupnames, dom_null
   and ci.sh pass.
+- Checkpoint 4 review round 1 (ChatGPT chat #11): the job's 📁 Files always goes through its chat (an older job with a stack and no chat gets one, linked to that stack); Files follows the newest-at-the-top choice (Chat and All read as a chat); a drag over a job's chat when the job is taken away lands nowhere (`S.dragCancelled`, set by `jbGone` or the reload). Point 1 (Chat as messages only) stays as the approved §8.8 says: Chat shows what was dropped into the conversation too.
