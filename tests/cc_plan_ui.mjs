@@ -64,7 +64,7 @@ try {
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!!document.querySelector('.camp-card')`);
-  await A.tap(`document.querySelector('.camp-card')`);
+  await A.tap(`document.querySelector('.camp-card')`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   ok(await A.until(`!!${T('.cc-chips')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   // No Pulse beside the page (it heads Report since 2026-11-25): the page has the whole width.

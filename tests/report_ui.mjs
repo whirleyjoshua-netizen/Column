@@ -81,7 +81,7 @@ try {
   for (let i = 0; i < 20 && !(await A.ev(`!!document.querySelector('.camp-card')`)); i++) { await A.ev(`document.querySelector('[data-tab=camps]')?.click(); true`); await sleep(300); }
   const card = `[...document.querySelectorAll('.camp-card')].find((c) => c.querySelector('b')?.textContent === ${JSON.stringify(B.name)})`;
   await A.until(`!!${card}`, 8000);
-  await A.tap(card);
+  await A.tap(card); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   // The pulse: the forecast, 9 days after the end date, and what's gone quiet.
   // It heads the Report tab since 2026-11-25.
   await A.until(`!!document.querySelector('#camps .cc-tab[data-ctab=progress]')`, 8000);

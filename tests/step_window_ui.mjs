@@ -54,7 +54,7 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
-  await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`);
+  await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   ok(await A.until(`!!document.querySelector('#camps .cc-phase-h [aria-label^="Phase settings"]')`), 'Ada opens the campaign');
   ok(await A.ev(`(() => { const r = [...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')); return r && !r.querySelector('[aria-label="Tools for this task"]') && !r.querySelector('[aria-label="Put on schedule"]'); })()`), 'campaign task rows are light (tools and scheduling are inside the task)');
   // Clicking the step opens it.
@@ -107,8 +107,8 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(sam.token)})); location.reload(); true`).catch(() => {});
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
-  await A.until(`!![...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')) || !!document.querySelector('.camp-card')`);
-  if (!(await A.ev(`!![...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez'))`))) await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`);
+  await A.until(`!![...document.querySelectorAll('#camps .cc-row, #camps .cc-rrow')].find((x) => x.textContent.includes('Lopez')) || !!document.querySelector('.camp-card')`);
+  if (!(await A.ev(`!![...document.querySelectorAll('#camps .cc-row, #camps .cc-rrow')].find((x) => x.textContent.includes('Lopez'))`))) await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   await A.until(`!![...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez'))`);
   await A.tap(`[...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')).querySelector('.cc-row-name')`);
   await A.tap(`document.querySelector('#camps .cc-td-full')`);

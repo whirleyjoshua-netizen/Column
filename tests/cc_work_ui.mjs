@@ -62,7 +62,7 @@ try {
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!!document.querySelector('.camp-card')`);
-  await A.tap(`document.querySelector('.camp-card')`);
+  await A.tap(`document.querySelector('.camp-card')`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   ok(await A.until(`!!${T('.cc-body')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   const chip = async (k) => { await A.tap(T(`.cc-chip[data-chip=${k}]`)); await A.until(`${T(`.cc-chip[data-chip=${k}]`)}.classList.contains('on')`); };
@@ -108,7 +108,7 @@ try {
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!!${T('.cc-tab[data-ctab=work]')} || !!document.querySelector('.camp-card')`);
-  if (!(await A.ev(`!!${T('.cc-tab[data-ctab=work]')}`))) await A.tap(`document.querySelector('.camp-card')`);
+  if (!(await A.ev(`!!${T('.cc-tab[data-ctab=work]')}`))) await A.tap(`document.querySelector('.camp-card')`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   await tabTo('work');
   ok(await A.until(`${T('select.cc-wview-sel')}?.value === 'board' && !!${T('.ccb')}`), 'a view kept from before opens on it (Board)');
   // A phone: the dropdown and chips fit.

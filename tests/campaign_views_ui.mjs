@@ -60,7 +60,7 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   for (let i = 0; i < 20 && !(await A.ev(`!!document.querySelector('.camp-card')`)); i++) { await A.ev(`document.querySelector('[data-tab=camps]')?.click(); true`); await sleep(300); }
-  await A.tap(`document.querySelector('.camp-card')`);
+  await A.tap(`document.querySelector('.camp-card')`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   await A.until(`!!${T('.cc-tab[data-ctab=work]')}`);
   await A.ev(`${T('.cc-tab[data-ctab=work]')}.click(); true`);
   ok(await A.until(`[...(${T('.cc-wview-sel')}?.options || [])].map((o) => o.value).join() === 'list,board,timeline,calendar' && !!${T('.cc-table')}`), 'Work has List, Board, Timeline and Calendar, on List');

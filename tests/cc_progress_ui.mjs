@@ -59,7 +59,7 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
-  const openCamp = async (name) => { await A.until(`[...document.querySelectorAll('.camp-card')].some((x) => x.textContent.includes(${JSON.stringify(name)}))`); await A.tap(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes(${JSON.stringify(name)}))`); await A.until(`${T('.cc-name')}?.textContent === ${JSON.stringify(name)}`); };
+  const openCamp = async (name) => { await A.until(`[...document.querySelectorAll('.camp-card')].some((x) => x.textContent.includes(${JSON.stringify(name)}))`); await A.tap(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes(${JSON.stringify(name)}))`); await A.until(`${T('.cc-name')}?.textContent === ${JSON.stringify(name)}`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); };
   await openCamp('Spring Promo');
   ok(await A.until(`!!${T('.cc-body')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);

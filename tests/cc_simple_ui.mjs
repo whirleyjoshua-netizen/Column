@@ -65,7 +65,7 @@ try {
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!!document.querySelector('.camp-card')`);
-  await A.tap(`document.querySelector('.camp-card')`);
+  await A.tap(`document.querySelector('.camp-card')`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   ok(await A.until(`!!${T('.cc-body')}`), 'the campaign opens');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   // ----- Task 2: the header, tabs and chips -----
@@ -79,7 +79,7 @@ try {
   await tabTo('work');
   await A.tap(T('.cc-crumb button'));
   await A.until(`!!document.querySelector('.camp-card')`);
-  await A.tap(`document.querySelector('.camp-card')`);
+  await A.tap(`document.querySelector('.camp-card')`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   ok(await A.until(`${T('.cc-body')}?.dataset.tab === 'plan'`), 'opening a campaign again lands on Plan');
   await A.tap(T('[aria-label="Campaign options"]'));
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Edit details'))`), 'editing the campaign is in ⋯');
@@ -179,11 +179,11 @@ try {
   await api('POST', '/campaigns', { name: 'Empty one', brief: 'Nothing yet' });
   await A.tap(T('.cc-crumb button'));
   await A.until(`[...document.querySelectorAll('.camp-card')].some((x) => x.textContent.includes('Empty one'))`);
-  await A.tap(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes('Empty one'))`);
+  await A.tap(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes('Empty one'))`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   ok(await A.until(`${T('.cc-name')}?.textContent === 'Empty one' && !!${T('.cc-addphase')} && ${T('.cc-planner')}.textContent.includes('At a glance')`), 'no phases: + Add Phase and At a glance');
   await A.tap(T('.cc-crumb button'));
   await A.until(`!!document.querySelector('.camp-card')`);
-  await A.tap(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes('Spring Promo'))`);
+  await A.tap(`[...document.querySelectorAll('.camp-card')].find((x) => x.textContent.includes('Spring Promo'))`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   await A.until(`!!${T('.cc-phase')}`);
   // On a phone: the brief first, then the phases; a task's details open and close.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 420, height: 860, deviceScaleFactor: 2, mobile: true });

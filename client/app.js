@@ -7042,9 +7042,12 @@
     return `${range} · ${left > 1 ? left + ' days left' : left === 1 ? 'ends tomorrow' : left === 0 ? 'ends today' : 'ended'}`;
   }
 
-  function openCampaign(id) {
+  function openCampaign(id, opts) {
     // Another campaign opens on its Plan (the tab sticks only while you stay in one campaign).
     if (id && id !== K.open) K.ctab = 'plan';
+    // And to be read (the owner, 2026-11-27): Edit is a button away. One just made opens to be worked on.
+    if (id !== K.open) { K.cedit = null; K.vtab = 'view'; }
+    if (opts?.edit) K.cedit = id;
     K.open = id;
     if (id) closeProjects(); // from a job's page (its campaigns, + Campaign): the campaign shows, not the job over it
     store.set('campOpen', id);
@@ -7069,6 +7072,7 @@
     const keep = root.scrollTop;
     const c = campById(K.open);
     if (!c) ccBoardDrop();
+    ccRO = false;
     root.replaceChildren(c ? campaignView(c) : K.overview ? overviewView() : campaignList());
     renderDock();
     root.scrollTop = keep;
@@ -7134,6 +7138,15 @@
   // Sketch (stage 4): the campaign's whiteboard, when the team has it on and the screen is wide enough to draw.
   const ccSketchOn = () => toolOn('whiteboard') && document.body.classList.contains('wide');
   const ccTabs = () => [['plan', 'Plan'], ['work', 'Work'], ['progress', 'Progress'], ...(ccSketchOn() ? [['sketch', 'Sketch']] : [])];
+  // Reading or editing (the owner, 2026-11-27: "I dont want every view to be editable"). A campaign opens to be read:
+  // Overview, Work and Progress, where you tick your own tasks and change nothing else. Edit (K.cedit) is the planner.
+  // Edit is a way of looking, not a permission: the server lets whoever sees a campaign change it, as before.
+  const CC_RTABS = [['view', 'Overview'], ['work', 'Work'], ['progress', 'Progress']];
+  const ccVtabOf = (k) => (CC_RTABS.some(([x]) => x === k) ? k : 'view');
+  let ccRO = false; // the campaign on the page is being read: its board and timeline don't drag, its tasks open to read
+  const ccReading = (c) => !!c && ccRO && K.open === c.id && K.cedit !== c.id && campsShown();
+  const ccEditOn = (c, tab) => { K.cedit = c.id; if (tab) K.ctab = tab; renderCamps(true); };
+  const ccEditOff = () => { K.cedit = null; renderCamps(true); };
   const ccTabOf = (k) => (k === 'activity' || k === 'report' ? 'progress' : ccTabs().some(([x]) => x === k) ? k : 'plan');
   const CC_CHIPS = [['all', 'All'], ['mine', 'My tasks'], ['overdue', 'Overdue'], ['blocked', 'Blocked']];
   const ccChipOf = (k) => (CC_CHIPS.some(([x]) => x === k) ? k : 'all');
@@ -7195,7 +7208,7 @@
       h('div', { class: 'ccb-h' }, col.av ? avatar(col.av) : null, h('b', {}, col.label), h('small', {}, String(col.list.length))),
       h('div', { class: 'ccb-list' }, col.list.map((t) => {
         const el = ccCard(t, { phase: by !== 'phase' });
-        el.addEventListener('pointerdown', (ev) => shDrag(ev, el, {
+        if (!ccRO) el.addEventListener('pointerdown', (ev) => shDrag(ev, el, {
           over: (x, y) => document.elementFromPoint(x, y)?.closest('.ccb-col:not(.nodrop)'),
           drop: (x, y) => { const to = document.elementFromPoint(x, y)?.closest('.ccb-col'); return to && to.dataset.col !== col.k ? to.dataset.col : null; },
           done: (k) => {
@@ -7213,7 +7226,7 @@
       }), col.list.length ? null : h('p', { class: 'ccb-empty' }, col.set ? 'Drop a task here' : 'None')))));
     const groups = h('div', { class: 'seg seg-sm ccb-by' }, h('small', {}, 'Columns:'), [['status', 'Status'], ['phase', 'Phase'], ['person', 'Person']].map(([k, l]) =>
       h('button', { class: by === k ? 'on' : null, 'data-by': k, onclick: () => { K.wgroup = k; renderCamps(); } }, l)));
-    return [groups, h('div', { class: 'ccb-scroll' }, board), h('p', { class: 'day-hint' }, 'Drag a card to another column to change it; tap one to open it.')];
+    return [groups, h('div', { class: 'ccb-scroll' }, board), h('p', { class: 'day-hint' }, ccRO ? 'Tap a card to open it.' : 'Drag a card to another column to change it; tap one to open it.')];
   }
   // Timeline: a bar for each task from its start to its due day, grouped by phase, with what it waits for drawn as an
   // arrow. Drag a bar to move it, pull either end to change the start or the due day, drag across an empty row to give a
@@ -7249,6 +7262,7 @@
       el.addEventListener('pointerdown', (ev) => {
         if (ev.button !== 0) return;
         ev.preventDefault(); ev.stopPropagation();
+        if (ccRO) return el.addEventListener('pointerup', () => taskWindow(t), { once: true }); // reading: it opens, it doesn't move
         const mode = ev.target.closest('.cct-h.l') ? 'start' : ev.target.closest('.cct-h.r') ? 'end' : 'move';
         const x0 = ev.clientX;
         let moved = false, na = a, nb = b;
@@ -7283,7 +7297,7 @@
       const lane = h('div', { class: 'cct-lane', style: `width:${W}px`, 'data-task': t.id }, t.due || t.startOn ? bar(t) : null);
       // An empty row: drag across it to give the task its days, or tap a day to make it due then.
       lane.addEventListener('pointerdown', (ev) => {
-        if (ev.button !== 0 || ev.target !== lane) return;
+        if (ccRO || ev.button !== 0 || ev.target !== lane) return;
         const a = dayAt(lane, ev.clientX), x0 = ev.clientX;
         let b = a, drew = false;
         const ghost = h('div', { class: 'cct-bar s-open cct-draw' });
@@ -7981,6 +7995,7 @@
     return h('button', { class: 'pill pill-btn camp-job', title: 'The job this campaign is for', onclick: () => openRecord(c.recordId) }, '📋 ' + (t ? 'For ' + recName(t, at.r) : 'Its job'));
   }
   function campaignView(c) {
+    ccRO = K.cedit !== c.id;
     const p = campProgress(c);
     const goals = goalsOf(c.id);
     const ch = S.workspace.channels.find((x) => x.id === c.channelId);
@@ -8031,6 +8046,7 @@
         campDates(c) ? h('span', { class: 'cc-meta-item' }, '📅 ', campDates(c)) : null,
         h('button', { class: 'pill pill-btn cc-owner', title: 'Who’s responsible', onclick: (e) => assignCampaignMenu(e.currentTarget, c) }, c.assigneeId ? avatar(c.assigneeId) : null, c.assigneeId ? memberName(c.assigneeId) : 'Assign to…'),
         h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn small cc-done-edit', title: 'Back to reading it', onclick: ccEditOff }, '✓ Done'),
         !c.test && runsIt(c) && c.status !== 'done' ? h('button', { class: 'btn small cc-testbtn', title: 'Run it for real with testers first: nothing goes out, and Go live puts it back', onclick: () => testSheet(c) }, '🧪 Test run') : null,
         h('button', { class: 'btn primary-btn small cc-add', onclick: (e) => openMenu(e.currentTarget, [{ head: 'Add to the campaign' },
           { label: '+ A phase', run: () => goalSheet(c) },
@@ -8172,7 +8188,16 @@
       subs ? ovSec('Sub-campaigns', ...[...subs.childNodes].filter((x) => !x.classList?.contains('cc-card-h'))) : null,
       ovSec('Team and roles', castStrip(c)),
       h('small', { class: 'cc-pp-hint' }, phases.length ? 'Click a phase or a task in the plan to change it here.' : 'Add the first phase, then its tasks go under it.'));
-    if (tab !== 'sketch') ccBoardDrop();
+    if (tab !== 'sketch' || ccRO) ccBoardDrop();
+    if (ccRO) {
+      const vt = ccVtabOf(K.vtab);
+      const rbody = {
+        view: () => [(() => { const l = lists.find((x) => x.id === K.listOpen); return l ? h('section', { class: 'cc-card cc-listopen' }, listCard(c, l)) : null; })(), ccReadView(c, phases, targets, where())],
+        work: () => [sendBars(c), workBody()],
+        progress: () => ccReport(c, { health: healthPart(), log: logPart() }),
+      }[vt]();
+      return h('div', { class: 'camp-view cc cc-reading' }, h('div', { class: 'cc-main' }, ccReadHead(c, hl), testBar(c, phases), h('div', { class: 'cc-body', 'data-tab': vt }, ...rbody.flat().filter(Boolean))));
+    }
     const body = {
       // Plan (the owner's sketch, 2026-11-22): what's saved on the left, the plan as a tree of tiles, a task's panel on the right.
       plan: () => [sendBars(c), (() => { const l = lists.find((x) => x.id === K.listOpen); return l ? h('section', { class: 'cc-card cc-listopen' }, listCard(c, l)) : null; })(), ccPlanner(c, phases, { left: ovBrief(), idle: ovIdle() })],
@@ -8181,6 +8206,118 @@
       progress: () => ccReport(c, { health: healthPart(), ideas: ideasPart(), log: logPart() }),
     }[tab]();
     return h('div', { class: 'camp-view cc' }, h('div', { class: 'cc-main' }, head, testBar(c, phases), h('div', { class: 'cc-body', 'data-tab': tab }, ...body.flat().filter(Boolean))));
+  }
+
+  // ----- Reading a campaign (the owner, 2026-11-27) -----
+  // The header while reading: where it is, its name, how it's going, dates and who runs it, all as text, and Edit.
+  function ccReadHead(c, hl) {
+    const tab = ccVtabOf(K.vtab);
+    return h('div', { class: 'cc-head' },
+      h('div', { class: 'cc-crumb' }, h('button', { class: 'linkish', onclick: () => openCampaign(null) }, 'Campaigns'), parentOf(c) ? [' › ', h('button', { class: 'linkish', onclick: () => openCampaign(c.parentId) }, parentOf(c).name)] : null, ' › ', h('span', {}, c.name)),
+      h('div', { class: 'cc-title-row' },
+        h('button', { class: 'icon-btn cc-back', 'aria-label': 'All campaigns', html: I.back, onclick: () => openCampaign(null) }),
+        h('h1', { class: 'camp-name cc-name' }, c.name),
+        c.test ? h('span', { class: 'pill cc-testpill' }, 'TEST') : null,
+        c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : healthPill(c, hl),
+        campDates(c) ? h('span', { class: 'cc-meta-item' }, '📅 ', campDates(c)) : null,
+        c.assigneeId ? h('span', { class: 'cc-meta-item cc-runner' }, avatar(c.assigneeId), ' ', memberName(c.assigneeId), ' runs it') : null,
+        h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn small primary-btn cc-edit', title: 'Change the plan: phases, tasks, who and when', onclick: () => ccEditOn(c) }, '✎ Edit'),
+        h('button', { class: 'icon-btn', 'aria-label': 'Campaign options', html: I.more, onclick: (e) => campaignMenu(e.currentTarget, c) })),
+      h('div', { class: 'camp-meta cc-pills' },
+        c.recordId ? campJobPill(c) : null,
+        campById(c.follows) ? h('button', { class: 'pill pill-btn', onclick: () => openCampaign(c.follows) }, '← After ' + campById(c.follows).name) : null,
+        S.campaigns.filter((x) => x.follows === c.id).map((x) => h('button', { class: 'pill pill-btn', onclick: () => openCampaign(x.id) }, 'Next: ' + x.name + ' →')),
+        c.private ? h('span', { class: 'pill' }, h('span', { class: 'is-task', html: I.lock }), 'Private') : null),
+      h('div', { class: 'cc-tabs', role: 'tablist' }, CC_RTABS.map(([k, l]) =>
+        h('button', { class: 'cc-tab' + (tab === k ? ' on' : ''), role: 'tab', 'aria-selected': String(tab === k), 'data-ctab': k, onclick: () => { K.vtab = k; renderCamps(); } }, l))));
+  }
+  // Tick a task while reading: only your own, and not while it waits on something.
+  const ccTickable = (t) => taskMine(t) && (t.done || !taskBlockers(t).length);
+  function ccTick(t, after) {
+    const btn = h('button', { class: 'check' + (t.done ? ' on' : ''), html: I.check, disabled: !ccTickable(t), 'aria-label': t.done ? 'Mark not done' : 'Mark done',
+      title: ccTickable(t) ? '' : taskMine(t) ? waitText(taskBlockers(t)) : 'Only whoever it’s for ticks it off' });
+    btn.addEventListener('click', async () => { btn.disabled = true; try { await patchTask(taskById(t.id) || t, { done: !t.done }); } catch (e) { toast(e.message); } renderCamps(true); after?.(); });
+    return btn;
+  }
+  // Overview while reading: the brief, how far along it is, and every phase with its tasks, top to bottom.
+  function ccReadView(c, phases, targets, where) {
+    const tasks = campTasks(c), doneN = tasks.filter((t) => t.done).length, p = campProgress(c);
+    const nowPhase = phases.find((g) => goalProgress(g).frac < 1);
+    const brief = [['Objective', c.brief], ['Audience', c.audience], ['Strategy', c.strategy]].filter(([, v]) => v && v.trim());
+    const row = (t, sub) => {
+      const [sc, sl] = ccStatus(t);
+      return h('div', { class: 'cc-rrow' + (t.done ? ' done' : '') + (sub ? ' sub' : ''), 'data-task': t.id },
+        ccTick(t),
+        h('button', { type: 'button', class: 'cc-rrow-name', onclick: () => taskWindow(t) }, t.text),
+        h('span', { class: 'cc-rrow-who' }, t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : ccWho(t) || ''),
+        h('span', { class: 'cc-rrow-due' + (isOverdue(t) ? ' late' : '') }, t.due ? dueLabel(t.due) : ''),
+        h('span', { class: 'cc-status ' + sc }, sl));
+    };
+    const phase = (g) => {
+      const gp = goalProgress(g), top = tasksInOrder(g.id).filter((t) => !t.parentId || !taskById(t.parentId));
+      const waits = goalBlockers(g);
+      return h('section', { class: 'cc-rphase' + (gp.frac >= 1 ? ' done' : g === nowPhase ? ' now' : ''), 'data-goal': g.id },
+        h('div', { class: 'cc-rphase-h' }, h('b', {}, g.title), h('small', {}, [gp.label, g.due ? 'by ' + dueLabel(g.due) : '', waits.length ? 'waits for ' + waits.map((x) => x.title).join(', ') : ''].filter(Boolean).join(' · ')), bar(gp.frac, c.color)),
+        top.length ? h('div', { class: 'cc-rtasks' }, top.flatMap((t) => [row(t), ...subtasksOf(t).map((x) => row(x, true))])) : h('p', { class: 'day-hint' }, 'No tasks in this phase yet.'));
+    };
+    return h('div', { class: 'cc-read' },
+      h('section', { class: 'cc-card cc-read-brief' },
+        brief.length ? h('dl', { class: 'cc-rbrief' }, brief.flatMap(([k, v]) => [h('dt', {}, k), h('dd', { html: linkify(v) })])) : h('p', { class: 'day-hint' }, 'No brief yet.'),
+        targets.length ? h('div', { class: 'cc-rtargets' }, h('dt', {}, 'Success metrics'), h('ul', { class: 'cc-metrics' }, targets.map((g) => { const gp = goalProgress(g); return h('li', { class: gp.frac >= 1 ? 'met' : '' }, h('span', { class: 'cc-met-ic' }, gp.frac >= 1 ? '✓' : '○'), h('span', {}, g.title, h('small', {}, gp.label))); }))) : null),
+      h('section', { class: 'cc-card cc-rprog' }, h('b', {}, Math.round(p * 100) + '%'), h('small', {}, ` done · ${doneN} of ${plural(tasks.length, 'task')}${nowPhase ? ' · now: ' + nowPhase.title : ''}`), bar(p, c.color)),
+      phases.length ? phases.map(phase) : h('p', { class: 'day-hint cc-rempty' }, 'No phases yet. Edit adds them.'),
+      h('section', { class: 'cc-card cc-rwhere' }, h('div', { class: 'cc-card-h' }, h('b', {}, 'Where things are')), where));
+  }
+  // A task to read (from a campaign being read): what it is, who and when, its details, checklist, subtasks, what it
+  // waits for, the step's resources, files and comments. Whoever it's for ticks it and its checklist; anyone can
+  // comment. Edit task switches the campaign to Edit and opens it there.
+  function taskRead(t) {
+    t = taskById(t.id) || t;
+    const g = goalById(t.goalId), camp = g && campById(g.campaignId);
+    const mine = taskMine(t);
+    const redraw = () => { const x = taskById(t.id); if (x && $(`#sheet:not(.hidden) .task-read[data-task="${t.id}"]`)) taskRead(x); };
+    const save = async (changes) => { try { await patchTask(taskById(t.id) || t, changes); } catch (e) { toast(e.message); } redraw(); renderCamps(); };
+    const blockers = taskBlockers(t), unlocks = t.done ? [] : unlocksOf(t);
+    const role = t.roleId ? (S.workspace.roles || []).find((r) => r.id === t.roleId)?.name : t.castId ? castOf(camp || {}).find((r) => r.id === t.castId)?.name : null;
+    const files = taskFiles(t), subs = subtasksOf(t), parent = t.parentId && taskById(t.parentId), rs = stepRes(g);
+    const [sc, sl] = ccStatus(t);
+    const row = (label, value) => h('div', { class: 'td-row' }, h('span', { class: 'td-l' }, label), h('span', { class: 'td-v' }, value));
+    const sec = (title, ...kids) => h('section', { class: 'td-sec' }, h('div', { class: 'td-sec-h' }, title), ...kids);
+    const cl = t.checklist || [];
+    const checklist = cl.length ? h('div', { class: 'td-cl' }, cl.map((x) => h('label', { class: 'td-cl-item' + (x.done ? ' done' : ''), 'data-item': x.id },
+      h('input', { type: 'checkbox', checked: !!x.done, disabled: !mine, onchange: (e) => save({ checklist: cl.map((y) => (y.id === x.id ? { ...y, done: e.target.checked, by: S.me?.member } : y)) }) }), h('span', {}, x.text)))) : null;
+    const cBox = h('textarea', { class: 'td-cbox', rows: 2, maxlength: 2000, placeholder: 'Write a comment…', 'aria-label': 'Write a comment' });
+    const post = h('button', { class: 'btn small primary-btn td-post', onclick: async () => {
+      if (!cBox.value.trim()) return;
+      post.disabled = true;
+      try { upsertTask(await api('POST', `/tasks/${t.id}/comments`, { text: cBox.value })); redraw(); } catch (er) { toast(er.message); post.disabled = false; }
+    } }, 'Comment');
+    const tick = h('button', { class: 'check' + (t.done ? ' on' : ''), html: I.check, disabled: !ccTickable(t), 'aria-label': t.done ? 'Mark not done' : 'Mark done', onclick: () => save({ done: !t.done }) });
+    sheet(camp ? camp.name : 'Task', [h('div', { class: 'win task-read td' + (t.done ? ' is-done' : ''), 'data-task': t.id },
+      parent ? h('button', { class: 'linkish td-parent', onclick: () => taskRead(parent) }, '↑ Subtask of “' + shortText(parent.text, 50) + '”') : null,
+      h('div', { class: 'win-head' }, tick, h('h2', { class: 'tr-title' }, t.text), h('span', { class: 'cc-status ' + sc }, sl)),
+      h('div', { class: 'td-grid' },
+        row('Phase', g ? g.title : '—'),
+        row('Who', t.assigneeId ? [avatar(t.assigneeId), ' ', memberName(t.assigneeId)] : role ? '👥 ' + role : h('small', { class: 'muted' }, 'Nobody yet')),
+        t.startOn ? row('Starts', dueLabel(t.startOn)) : null,
+        row('Due', t.due ? h('span', { class: isOverdue(t) ? 'late' : '' }, dueLabel(t.due)) : h('small', { class: 'muted' }, 'No date')),
+        t.priority ? row('Priority', h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority])) : null,
+        t.wo ? row('Work order', t.wo.no) : null),
+      t.description ? sec(t.wo ? 'Instructions' : 'Description', h('div', { class: 'tr-desc', html: linkify(t.description) })) : null,
+      checklist ? sec(`${t.wo ? 'Steps' : 'Checklist'} · ${cl.filter((x) => x.done).length}/${cl.length}`, checklist) : null,
+      subs.length ? sec(`Subtasks · ${subs.filter((x) => x.done).length}/${subs.length}`, h('div', { class: 'td-subs' }, subs.map((x) => h('div', { class: 'td-sub' + (x.done ? ' done' : ''), 'data-sub': x.id },
+        ccTick(x, redraw), h('button', { class: 'td-sub-open', onclick: () => taskRead(x) }, x.text), x.assigneeId ? avatar(x.assigneeId) : null)))) : null,
+      blockers.length || unlocks.length ? sec('Waits for', h('div', { class: 'td-deps' },
+        blockers.length ? blockers.map((x) => h('span', { class: 'td-dep' }, x.hidden ? 'Something in a campaign you can’t see' : x.text || x.title)) : h('small', { class: 'muted' }, 'Nothing')),
+        unlocks.length ? h('small', { class: 'td-opens' }, 'Finishing it opens: ' + unlocks.map((x) => x.text).join(', ')) : null) : null,
+      rs.length ? sec(`From the step · ${rs.length}`, h('div', { class: 'res-list td-res' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, r.title || r.name || r.url || 'Open'))))) : null,
+      files.length ? sec(`Files · ${files.length}`, h('div', { class: 'tr-files' }, files.map((it) => h('button', { class: 'btn small', onclick: () => openPreview(it) }, it.name || 'Note')))) : null,
+      sec(`Comments${t.comments?.length ? ' · ' + t.comments.length : ''}`, h('div', { class: 'td-comments' },
+        (t.comments || []).map((cm) => h('div', { class: 'td-comment', 'data-comment': cm.id }, avatar(cm.memberId), h('div', {}, h('div', { class: 'td-c-h' }, h('b', {}, cm.by), h('small', {}, ' · ' + ago(cm.at))), h('p', {}, cm.text)))),
+        h('div', { class: 'td-cnew' }, cBox, post))),
+      h('div', { class: 'btns td-actions' }, h('span', { style: 'flex:1' }),
+        camp ? h('button', { class: 'btn small tr-edit', title: 'Switch the campaign to Edit and open this task there', onclick: () => { ccEditOn(camp); taskWindow(taskById(t.id) || t); } }, '✎ Edit task') : null))]);
   }
 
   // ----- Plan: the planner (the owner's sketch, 2026-11-22) -----
@@ -8865,6 +9002,7 @@
     t = taskById(t.id) || t;
     const g = goalById(t.goalId);
     const camp = g && campById(g.campaignId);
+    if (ccReading(camp)) return taskRead(t);
     // Only while it's still open on this task: a save that answers after the window was closed (or another opened)
     // drew it open again (2026-11-25).
     const redraw = () => { if (!$(`#sheet:not(.hidden) .task-win[data-task="${t.id}"]`)) return; const sc = $('#sheet .sheet')?.scrollTop || 0; taskWindow(taskById(t.id) || t); const el = $('#sheet .sheet'); if (el) el.scrollTop = sc; };
@@ -9618,7 +9756,7 @@
     const k = kindOf(l);
     if (k === 'reference') return dockOpen(c, { type: 'list', id: l.id });
     if (k === 'form') return openLog(c, { ask: true });
-    K.listOpen = l.id; K.runOpen = null; K.ctab = 'plan';
+    K.listOpen = l.id; K.runOpen = null; K.ctab = 'plan'; K.vtab = 'view';
     renderCamps();
     setTimeout(() => $('#camps .cc-listopen')?.scrollIntoView({ block: 'start' }));
   }
@@ -9989,8 +10127,8 @@
   }
   // The log lives on Progress (2026-11-25): starting it from Plan or Work (a list, a note, a follow-up) goes there.
   function ccToLog(c) {
-    if (K.open !== c.id || ccTabOf(K.ctab) === 'progress') return;
-    K.ctab = 'progress';
+    if (K.open !== c.id || (K.cedit === c.id ? ccTabOf(K.ctab) : ccVtabOf(K.vtab)) === 'progress') return;
+    K.ctab = 'progress'; K.vtab = 'progress';
     setTimeout(() => $('#camps .ccp-log')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
   }
   function logRow(c, l, r) {
@@ -10812,7 +10950,7 @@
       } catch (e) { toast(e.message); }
       closeSheet();
       setTab('camps');
-      openCampaign(cid);
+      openCampaign(cid, { edit: true });
     }
     function drawSk() {
       const x = skId && skById(skId);
@@ -10906,7 +11044,7 @@
         }
       }
       const tabNow = K.ctab;
-      openCampaign(saved.id);
+      openCampaign(saved.id, isNew ? { edit: true } : undefined);
       if (isNew && D.board) { K.ctab = tabNow; renderCamps(); }
     }, c ? 'Save' : 'Make the campaign');
     // Full size, beside the sidebar like a page (as the automation builder is). The sidebar still goes places; with

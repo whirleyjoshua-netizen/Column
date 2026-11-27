@@ -71,8 +71,8 @@ try {
     await sleep(500);
     await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
     await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
-    await A.until(`!!document.querySelector('.camp-card') || !!${T('.cc-chips')}`);
-    if (!(await A.ev(`!!${T('.cc-chips')}`))) await A.tap(`document.querySelector('.camp-card')`);
+    await A.until(`!!document.querySelector('.camp-card') || !!${T('.cc-chips')} || !!${T('.cc-edit')}`);
+    if (!(await A.ev(`!!${T('.cc-chips')} || !!${T('.cc-edit')}`))) await A.tap(`document.querySelector('.camp-card')`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
     await A.until(`!!${T('.cc-chips')}`);
     await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
     await tabTo('plan');

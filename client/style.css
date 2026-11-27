@@ -5268,3 +5268,42 @@ body:not(.wide) .kapp-grid { grid-template-columns: 1fr; }
 .kapp-detail { display: flex; flex-direction: column; gap: 16px; }
 .kapp-actions .btns { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .kapp-remove.confirm { border-color: var(--danger); color: var(--danger); }
+
+/* Reading a campaign (2026-11-27): the brief, progress, and each phase with its tasks, read only. */
+.cc-read { display: flex; flex-direction: column; gap: 14px; max-width: 980px; }
+.cc-rbrief { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; margin: 0; }
+.cc-rbrief dt, .cc-rtargets dt { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding-top: 2px; }
+.cc-rbrief dd { margin: 0; line-height: 1.5; white-space: pre-wrap; }
+.cc-rtargets { margin-top: 12px; }
+.cc-rprog { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 6px; }
+.cc-rprog > b { font-size: 22px; }
+.cc-rprog .bar { flex-basis: 100%; margin-top: 6px; }
+.cc-rphase { border: 1px solid var(--line); border-radius: 12px; background: var(--card); overflow: hidden; }
+.cc-rphase.now { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.cc-rphase-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.cc-rphase-h small { color: var(--muted); }
+.cc-rphase-h .bar { flex-basis: 100%; }
+.cc-rphase.done .cc-rphase-h b::before { content: '✓ '; color: var(--ok, #1a7f37); }
+.cc-rphase > .day-hint { padding: 10px 14px; margin: 0; }
+.cc-rrow { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto auto; align-items: center; gap: 10px; padding: 7px 14px; border-bottom: 1px solid var(--line); }
+.cc-rrow:last-child { border-bottom: 0; }
+.cc-rrow.sub { padding-left: 42px; }
+.cc-rrow.done .cc-rrow-name { text-decoration: line-through; color: var(--muted); }
+.cc-rrow .check:disabled { opacity: .35; cursor: default; }
+.cc-rrow-name { all: unset; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-rrow-name:hover, .cc-rrow-name:focus-visible { color: var(--accent); text-decoration: underline; }
+.cc-rrow-who, .cc-rrow-due { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.cc-rrow-due.late { color: var(--bad, #c62828); }
+.cc-rempty { padding: 4px 2px; }
+.cc-runner { display: inline-flex; align-items: center; gap: 4px; }
+.task-read .tr-title { font-size: 18px; margin: 0; flex: 1; min-width: 0; }
+.task-read .tr-desc { white-space: pre-wrap; line-height: 1.5; }
+.task-read .td-cl-item { display: flex; gap: 8px; align-items: center; }
+.task-read .td-cl-item.done span { text-decoration: line-through; color: var(--muted); }
+.task-read .tr-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-read .late { color: var(--bad, #c62828); }
+@media (max-width: 640px) {
+  .cc-rrow { grid-template-columns: 22px minmax(0, 1fr) auto; }
+  .cc-rrow-who { display: none; }
+  .cc-rbrief { grid-template-columns: 1fr; }
+}

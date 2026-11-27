@@ -75,7 +75,7 @@ try {
   await api('POST', '/tasks', { goalId: st.goals.find((x) => x.campaignId === run.id).id, text: 'Walk the customer through it' });
   const runCard = `[...document.querySelectorAll('.camp-card')].find((c) => c.querySelector('b')?.textContent === ${JSON.stringify(run.name)})`;
   ok(await A.until(`!!${runCard}`, 8000), 'the run is on the list: ' + run.name);
-  await A.tap(runCard);
+  await A.tap(runCard); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   await A.until(`!!document.querySelector('#camps [aria-label="Campaign options"]')`, 8000);
   await A.tap(`document.querySelector('#camps [aria-label="Campaign options"]')`);
   ok(await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === '📖 Its SOP: Blind install (v1)') && [...document.querySelectorAll('#menu button')].some((b) => b.textContent === 'Update the SOP from this campaign…')`), 'a run’s menu has its SOP and Update the SOP from this campaign: ' + await A.ev(`[...document.querySelectorAll('#menu button')].map((b) => b.textContent).join(' | ')`));

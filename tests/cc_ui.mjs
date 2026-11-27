@@ -62,7 +62,7 @@ try {
   await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('[data-tab=camps]')`, 15000);
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!!document.querySelector('.camp-card')`);
-  await A.tap(`document.querySelector('.camp-card')`);
+  await A.tap(`document.querySelector('.camp-card')`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
   ok(await A.until(`!!${T('.cc-chips')}`), 'a campaign opens');
   ok(await A.ev(`${T('.cc-name')}.textContent === 'New Client Onboarding' && !!${T('.cc-title-row .health')} && ${T('.cc-owner')}.textContent.includes('You') && ${T('.cc-crumb')}.textContent.startsWith('Campaigns')`), 'header: name, health, owner, breadcrumb');
   // The numbers left the header for one line of chips (2026-11-25): how complete it is, then All, My tasks, Overdue, Blocked.
