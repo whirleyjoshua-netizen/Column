@@ -421,6 +421,13 @@ try {
   ok(r.status === 409 && sameRec && !sameRec.chatId, 'an existing job chat with a broken link: 409, and the job no longer names it as its chat: ' + r.status + ' ' + sameRec?.chatId);
   ok(sameSt?.channelId === 'oldphoto' && st.workspace.channels.some((c) => c.recordId === jSame.id), 'the feed and the stack are left as they were');
   ok(((await rico('GET', '/jobs')).body?.jobs || []).find((j) => j.id === jSame.id)?.chatId === null, 'and the Jobs list gives it no chatId');
+  // The marker is kept: after a restart the safety net still leaves both broken jobs alone.
+  await stop();
+  const db2 = JSON.parse(fs.readFileSync(DIR + '/db.json', 'utf8'));
+  ok(db2.records?.[jSame.id]?.chatBroken === true && db2.records?.[jConf.id]?.chatBroken === true && !db2.records?.[jSame.id]?.chatId, 'the broken marker is saved (both jobs), and no chatId');
+  await start();
+  st = await ws();
+  ok(!st.workspace.channels.some((c) => c.recordId === jConf.id) && st.workspace.stacks.find((x) => x.recordId === jSame.id)?.channelId === 'oldphoto', 'after the restart nothing was retried or changed');
   ok(st.workspace.channels.filter((c) => c.recordId === jBoard.id).length === 1, 'and no second feed for a job: ' + st.workspace.channels.filter((c) => c.recordId === jBoard.id).length);
 } catch (e) {
   console.log('FAIL threw: ' + (e.stack || e));
