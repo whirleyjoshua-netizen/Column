@@ -62,7 +62,12 @@ try {
   // Enter in "Start a run…" starts a checklist run, not a Map run.
   await A.ev(`location.href = '/?go=camp:${c.id}'; true`);
   await A.until(`document.readyState === 'complete' && !!document.querySelector('#settingsBtn')`, 20000);
-  await A.tap(`[...document.querySelectorAll('.clist-name')].find((b) => b.textContent === 'Install checklist')`);
+  // A list opens from Lists & docs (2026-11-25), on the campaign as it's read (2026-11-27).
+  await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent.startsWith('Lists & docs'))`);
+  await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent.startsWith('Lists & docs'))`);
+  await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.startsWith('Install checklist'))`);
+  await A.tap(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.startsWith('Install checklist'))`);
+  await A.until(`!!document.querySelector('input[aria-label="Start a run"]')`);
   await A.tap(`document.querySelector('input[aria-label="Start a run"]')`);
   await A.cmd('Input.insertText', { text: 'Smith house' });
   await A.key('Enter', 13);
