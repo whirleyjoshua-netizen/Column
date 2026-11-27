@@ -3281,6 +3281,8 @@ function applyCampaign(c, body, ws, auth) {
     c[k] = body[k] || null;
   }
   if (body.color !== undefined) c.color = COLORS.includes(body.color) ? body.color : 'violet';
+  // What it is (the owner, 2026-11-27): a Checklist (a plain list of tasks) or a Campaign (the default).
+  if (body.type !== undefined) { if (body.type === 'checklist') c.type = 'checklist'; else delete c.type; }
   // What it may spend, from Finance entries tagged to it. Blank or 0 takes the budget away.
   if (body.budget !== undefined) {
     const v = String(body.budget ?? '').replace(/[$,\s]/g, '');

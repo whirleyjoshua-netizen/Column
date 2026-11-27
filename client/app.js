@@ -7138,7 +7138,7 @@
       const mine = gs.flatMap((g) => tasksOf(g.id)).filter((t) => !t.done && taskMine(t)).length;
       const subs = subsOf(c).length;
       return h('div', { class: 'camp-card-wrap c-' + c.color }, h('button', { class: 'camp-card c-' + c.color + (c.status === 'paused' ? ' paused' : ''), onclick: () => openCampaign(c.id) },
-        h('div', { class: 'cc-top' }, h('b', {}, c.name), c.private ? h('span', { class: 'cc-lock', html: I.lock, title: 'Private' }) : null, h('span', { class: 'cc-pct' }, Math.round(p * 100) + '%')),
+        h('div', { class: 'cc-top' }, h('b', {}, c.name), c.type === 'checklist' ? h('span', { class: 'pill cc-kind' }, 'Checklist') : null, c.private ? h('span', { class: 'cc-lock', html: I.lock, title: 'Private' }) : null, h('span', { class: 'cc-pct' }, Math.round(p * 100) + '%')),
         bar(p, c.color),
         h('div', { class: 'cc-sub' }, [parentOf(c) ? 'Part of ' + parentOf(c).name : '', campById(c.follows) ? 'after ' + campById(c.follows).name : '', c.assigneeId ? '→ ' + memberName(c.assigneeId) : '', campDates(c), `${gs.length} goal${gs.length === 1 ? '' : 's'}`, subs ? plural(subs, 'sub-campaign') : '', mine ? `${mine} for you` : '', c.budget && c.budgetSpent > c.budget ? 'over budget' : '', c.status === 'paused' ? 'paused' : ''].filter(Boolean).join(' · '))),
         subRows(c));
@@ -8252,6 +8252,7 @@
       h('div', { class: 'cc-title-row' },
         h('button', { class: 'icon-btn cc-back', 'aria-label': 'All campaigns', html: I.back, onclick: () => openCampaign(null) }),
         h('h1', { class: 'camp-name cc-name' }, c.name),
+        c.type === 'checklist' ? h('span', { class: 'pill cc-kind' }, 'Checklist') : null,
         c.test ? h('span', { class: 'pill cc-testpill' }, 'TEST') : null,
         c.status !== 'active' ? h('span', { class: 'pill' }, c.status === 'done' ? 'Finished' : 'Paused') : healthPill(c, hl),
         campDates(c) ? h('span', { class: 'cc-meta-item' }, '📅 ', campDates(c)) : null,
@@ -10779,6 +10780,10 @@
       cast: (c?.cast || []).map((r) => ({ id: r.id, name: r.name, about: r.about || '', memberIds: [...r.memberIds] })),
       outcomes: (c?.outcomes || ['Reached', 'No answer', 'Not interested', 'Booked']).join('\n'), methods: (c?.methods || ['Call', 'Email', 'Visit']).join('\n'),
       steps: [], // new campaigns: { title, stage }
+      // What it is (the owner, 2026-11-27): a Checklist or a Campaign; a new one asks first. A checklist's tasks, one
+      // per line, for one person, due one day.
+      type: c ? (c.type === 'checklist' ? 'checklist' : 'campaign') : main || seed ? 'campaign' : null,
+      clTasks: '', clWho: S.me?.memberId || '', clDue: '',
       ...(seed || {}),
     };
     const owner = !c || c.ownerId === S.me?.memberId;
@@ -11038,24 +11043,50 @@
     SK.onChange = () => { if (sideBox.isConnected && side === 'sk') drawSk(); };
     drawSide();
 
-    // ---- four stages (Command Center part 3, 2026-11-20): one at a time, with Back and Next; any can be opened ----
-    const STAGES = [['Foundation', [startFrom, basics, forSec]], ['Structure', [stepsSec, boardOpt]], ['Execution', [peopleSec, logSec]], ['Resources & launch', [moneySec, launchSec]]];
-    let stage = 0;
-    const stagesNav = h('ol', { class: 'cb-stages' });
-    const stageNav = h('div', { class: 'cb-stage-nav' });
-    function drawStage() {
-      STAGES.forEach(([, secs], i) => secs.forEach((x) => x && (x.hidden = i !== stage)));
-      stagesNav.replaceChildren(...STAGES.map(([name], i) => h('li', {}, h('button', { type: 'button', class: 'cb-stage' + (i === stage ? ' on' : i < stage ? ' past' : ''), 'data-stage': String(i), 'aria-current': i === stage ? 'step' : null, onclick: () => { stage = i; drawStage(); } },
-        h('span', { class: 'cb-stage-n' }, i < stage ? '✓' : String(i + 1)), h('span', {}, name)))));
-      stageNav.replaceChildren(
-        stage > 0 ? h('button', { type: 'button', class: 'btn small cb-back', onclick: () => { stage--; drawStage(); } }, '← ' + STAGES[stage - 1][0]) : h('span'),
-        stage < STAGES.length - 1 ? h('button', { type: 'button', class: 'btn small primary-btn cb-next', onclick: () => { stage++; drawStage(); stagesNav.scrollIntoView?.({ block: 'nearest' }); } }, 'Next: ' + STAGES[stage + 1][0] + ' →') : '');
+    // ---- one page (the owner, 2026-11-27: "a simple one page fill in"): a new one asks Checklist or Campaign first.
+    // A Checklist is a name, its tasks, who and when, maybe a job. A Campaign is what it is, where it starts from and
+    // its steps, with the rest (the job, people and roles, logging, money, launch) under More options, open when
+    // changing one that's made. ----
+    const kinds = isNew && !main && !seed ? h('div', { class: 'cb-kinds', role: 'radiogroup', 'aria-label': 'What are you making?' }) : null;
+    const drawKinds = () => kinds?.replaceChildren(...[['checklist', 'Checklist', 'A list of tasks to tick off: a job’s punch list, an opening routine, a move.'], ['campaign', 'Campaign', 'A push toward a goal, in steps: marketing, growing, a launch.']].map(([k, l, sub]) =>
+      h('button', { type: 'button', role: 'radio', class: 'cb-kind' + (D.type === k ? ' on' : ''), 'data-kind': k, 'aria-checked': String(D.type === k), onclick: () => { D.type = k; drawMain(); } }, h('b', {}, l), h('small', {}, sub))));
+    const clName = h('input', { class: 'cb-name', maxlength: 80, placeholder: 'Lee house: A/C repair, Opening the shop…', value: D.name });
+    clName.addEventListener('input', () => { D.name = clName.value; });
+    const clTasks = h('textarea', { class: 'cb-cl-tasks', rows: 8, maxlength: 20000, placeholder: 'Check the filter\nReplace the capacitor\nTest cooling' });
+    clTasks.value = D.clTasks;
+    clTasks.addEventListener('input', () => { D.clTasks = clTasks.value; });
+    const clWho = assigneeSelect(D.clWho);
+    clWho.addEventListener('change', () => { D.clWho = clWho.value; });
+    const clDue = h('input', { type: 'date', class: 'cb-cl-due', value: D.clDue });
+    clDue.addEventListener('change', () => { D.clDue = clDue.value; });
+    clDue.addEventListener('input', () => { D.clDue = clDue.value; });
+    const clJob = h('select', { class: 'cb-cl-job' });
+    const fillJobs = (el) => { const v = D.recordId; el.replaceChildren(h('option', { value: '' }, 'No job'), ...jobs().map((j) => h('option', { value: j.id }, `${j.label} · ${j.p.name}`))); el.value = v; };
+    fillJobs(clJob);
+    clJob.addEventListener('change', () => { D.recordId = clJob.value; });
+    const clSec = sec('The checklist', null,
+      h('label', {}, 'Name', clName),
+      h('label', {}, 'Tasks, one per line', clTasks),
+      h('div', { class: 'row2' }, h('label', {}, 'For', clWho), h('label', {}, 'Due (optional)', clDue)),
+      h('label', {}, 'For a job (optional)', clJob));
+    const more = h('details', { class: 'cb-more', open: !isNew }, h('summary', {}, 'More options', h('small', {}, ' · the job, people and roles, what gets logged, money' + (isNew && !main ? ', launch' : ''))),
+      ...[forSec, peopleSec, logSec, moneySec, launchSec].filter(Boolean));
+    const mainBox = h('div', { class: 'cb-main' });
+    function drawMain() {
+      drawKinds();
+      const parts = D.type === 'checklist' ? [clSec] : D.type === 'campaign' ? [startFrom, basics, stepsSec, boardOpt, more] : [h('p', { class: 'day-hint cb-pick' }, 'Pick one to start.')];
+      mainBox.replaceChildren(...[kinds, ...parts].filter(Boolean));
+      sideBox.hidden = D.type !== 'campaign';
+      const btn = $('#sheet .sheet > .btns .primary-btn');
+      if (btn) btn.textContent = c ? 'Save' : D.type === 'checklist' ? 'Make the checklist' : 'Make the campaign';
+      (D.type === 'checklist' ? clName : D.type === 'campaign' && isNew ? name : null)?.focus();
     }
-    drawStage();
 
     sheet(c ? `Campaign · ${c.name}` : main ? `New sub-campaign of ${main.name}` : 'New campaign', [
-      h('div', { class: 'cb-grid' }, h('div', { class: 'cb-main' }, stagesNav, ...STAGES.flatMap(([, secs]) => secs.filter(Boolean)), stageNav), sideBox),
+      h('div', { class: 'cb-grid' }, mainBox, sideBox),
     ], async () => {
+      if (!D.type) throw new Error('Pick Checklist or Campaign first.');
+      if (D.type === 'checklist') return makeChecklist();
       const body = {
         name: D.name, brief: D.brief, audience: D.audience, strategy: D.strategy, start: D.start || null, end: D.end || null, budget: D.budget.trim() || null, follows: D.follows || null, color: D.color,
         assigneeId: D.assigneeId || null, recordId: D.recordId || null, cast: D.cast.filter((r) => r.name.trim()),
@@ -11083,11 +11114,27 @@
       openCampaign(saved.id, isNew ? { edit: true } : undefined);
       if (isNew && D.board) { K.ctab = tabNow; renderCamps(); }
     }, c ? 'Save' : 'Make the campaign');
+    // A checklist: the campaign (for whoever it's for, who runs it), one list, and a task for each line.
+    async function makeChecklist() {
+      const lines = D.clTasks.split('\n').map((x) => x.trim()).filter(Boolean);
+      if (!D.name.trim()) throw new Error('Give it a name.');
+      if (!lines.length) throw new Error('Add its tasks, one per line.');
+      if (lines.length > 200) throw new Error('A checklist holds up to 200 tasks.');
+      const saved = await api('POST', '/campaigns', { name: D.name.trim(), type: 'checklist', color: D.color, start: todayKey(), assigneeId: D.clWho || null, recordId: D.recordId || null });
+      S.campaigns = [...S.campaigns.filter((x) => x.id !== saved.id), saved];
+      const g = await api('POST', '/goals', { campaignId: saved.id, title: 'Tasks', kind: 'tasks' });
+      if (!S.goals.some((x) => x.id === g.id)) S.goals.push(g);
+      for (const [i, text] of lines.entries()) {
+        try { upsertTask(await api('POST', '/tasks', { goalId: g.id, text, order: i, assigneeId: D.clWho || null, due: D.clDue || null })); } catch (e) { toast(e.message); }
+      }
+      openCampaign(saved.id);
+    }
+    drawMain();
     // Full size, beside the sidebar like a page (as the automation builder is). The sidebar still goes places; with
     // unsaved changes it stays and says so.
     const page = $('#sheet .sheet');
     page?.classList.add('camp-builder');
-    if (!PR.records.size) prLoadAll().then(() => { if (page?.isConnected) { const v = jobSel.value; jobSel.replaceChildren(h('option', { value: '' }, 'No job: it stands on its own'), ...jobs().map((j) => h('option', { value: j.id }, `${j.label} · ${j.p.name}`))); jobSel.value = v || D.recordId; drawSteps(); drawSum(); } });
+    if (!PR.records.size) prLoadAll().then(() => { if (page?.isConnected) fillJobs(clJob); if (page?.isConnected) { const v = jobSel.value; jobSel.replaceChildren(h('option', { value: '' }, 'No job: it stands on its own'), ...jobs().map((j) => h('option', { value: j.id }, `${j.label} · ${j.p.name}`))); jobSel.value = v || D.recordId; drawSteps(); drawSum(); } });
     const was = JSON.stringify(D);
     if (page) page._keep = () => JSON.stringify(D) !== was && 'Save the campaign, or close it to leave it as it was.'; // nor does the browser's Back
     const leave = (e) => {
@@ -11098,8 +11145,7 @@
       closeSheet();
     };
     document.addEventListener('click', leave, true);
-    if (focus === 'budget') page?.querySelector('.cb-budget')?.focus();
-    else if (isNew) name.focus();
+    if (focus === 'budget') { more.open = true; page?.querySelector('.cb-budget')?.focus(); }
   }
 
   function goalSheet(c, g) {

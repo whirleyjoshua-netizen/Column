@@ -98,6 +98,7 @@ ok(await A.until(`document.querySelector('#sheet').classList.contains('hidden') 
 // With something typed in it, Back keeps it and says so.
 await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === '+ New')`);
 await A.until(`!!document.querySelector('#sheet .sheet.camp-builder')`);
+await A.tap(`document.querySelector('#sheet .cb-kind[data-kind=campaign]')`); // + New asks Checklist or Campaign first (2026-11-27)
 await A.ev(`(() => { const i = document.querySelector('#sheet .cb-main input:not([type])') || document.querySelector('#sheet .cb-main input[type=text]'); i.focus(); return true; })()`);
 await A.type('Spring tune-ups');
 await A.ev(`document.activeElement.dispatchEvent(new Event('change', { bubbles: true })); true`);
