@@ -51,7 +51,8 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); true`);
   ok(await A.until(`!document.querySelector('#apps').classList.contains('hidden') && document.querySelector('#apps h1')?.textContent.includes('Apps & Integrations')`), 'it opens as a page');
   ok(await A.ev(`document.querySelector('#tabs [data-tab=apps]').classList.contains('on')`), 'and its tab is on');
-  ok(await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].map((b) => b.textContent).join('|')`) === 'Apps|Tools|Developers', 'tabs: Apps, Tools, Developers');
+  ok(await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].map((b) => b.textContent).join('|')`) === 'Kloomie apps|Integrations|Developers', 'tabs: Kloomie apps, Integrations, Developers');
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations').click(); true`);
   ok(await A.until(`document.querySelectorAll('#apps .app-tile').length >= 60`), 'a big directory of apps: ' + await A.ev(`document.querySelectorAll('#apps .app-tile').length`));
   ok(await A.ev(`['Email & calendar', 'Money & payments', 'Field service & trades', 'Marketing & social', 'AI'].every((c) => [...document.querySelectorAll('#apps .apps-cat h2')].some((h) => h.textContent.startsWith(c)))`), 'grouped by kind');
   ok(await A.until(`!!document.querySelector('#apps .app-tile[data-app=quickbooks] .app-logo svg path') && !!document.querySelector('#apps .app-tile[data-app=stripe] .app-logo svg')`), 'with the apps’ logos');
@@ -112,11 +113,13 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); true`);
   ok(await A.until(`!!document.querySelector('#apps .apps-connected .app-tile[data-app=leads]') && document.querySelector('#apps .apps-connected').textContent.includes('1 connected')`), 'once on, lead forms are under Connected');
 
-  // Tools.
-  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Tools').click(); true`);
-  ok(await A.until(`document.querySelectorAll('#apps .tool-tile').length >= 12 && !!document.querySelector('#apps .tool-tile[data-tool=news] input[type=checkbox]')`), 'Tools: a tile for each, with a switch');
-  await A.ev(`(() => { const i = document.querySelector('#apps .tool-tile[data-tool=news] input'); i.checked = false; i.dispatchEvent(new Event('change')); return true; })()`);
-  ok(await (async () => { for (let i = 0; i < 30; i++) { if ((await api('GET', '/state')).workspace.tools.news === false) return true; await sleep(100); } return false; })(), 'switching News off turns it off for the team');
+  // Kloomie apps (tests/kloomie_apps_ui.mjs has the rest).
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Kloomie apps').click(); true`);
+  ok(await A.until(`document.querySelectorAll('#apps .kapp-tile').length >= 12 && !!document.querySelector('#apps .kapp-tile[data-kapp=news]')`), 'Kloomie apps: a tile for each');
+  await A.ev(`document.querySelector('#apps .kapp-tile[data-kapp=news] .kapp-name').click(); true`);
+  await A.until(`!!document.querySelector('#apps .kapp-detail .kapp-remove')`);
+  await A.ev(`(() => { const b = document.querySelector('#apps .kapp-detail .kapp-remove'); b.click(); b.click(); return true; })()`);
+  ok(await (async () => { for (let i = 0; i < 30; i++) { if ((await api('GET', '/state')).workspace.tools.news === false) return true; await sleep(100); } return false; })(), 'removing News turns it off for the team');
 
   // Developers.
   await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Developers').click(); true`);
@@ -129,10 +132,10 @@ try {
   await A.ev(`document.querySelector('#settings .setx-item[data-page=teamset]').click(); true`);
   ok(await A.until(`!!document.querySelector('#settings .apps-moved') && !document.querySelector('#settings .tools-sec')`), 'Team’s Tools moved out, with a pointer');
   await A.ev(`document.querySelector('#settings .apps-moved button').click(); true`);
-  ok(await A.until(`document.querySelector('#settings').classList.contains('hidden') && !document.querySelector('#apps').classList.contains('hidden') && !!document.querySelector('#apps .tool-tile')`), 'which opens Apps & Integrations → Tools');
+  ok(await A.until(`document.querySelector('#settings').classList.contains('hidden') && !document.querySelector('#apps').classList.contains('hidden') && !!document.querySelector('#apps .kapp-tile')`), 'which opens Apps & Integrations → Kloomie apps');
 
   // A phone: two tiles a row, nothing off the side.
-  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Apps').click(); true`);
+  await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations').click(); true`);
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 800, deviceScaleFactor: 2, mobile: true });
   ok(await A.until(`!document.body.classList.contains('wide')`), 'a phone');
   await sleep(300);
@@ -143,9 +146,9 @@ try {
     const r = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(process.env.SHOTS + '/apps.png', Buffer.from(r.result.data, 'base64'));
     await A.ev(`document.querySelector('#apps').scrollTop = 900; true`); await sleep(200);
     const r2 = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(process.env.SHOTS + '/apps2.png', Buffer.from(r2.result.data, 'base64'));
-    await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Tools').click(); true`); await sleep(300);
+    await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Kloomie apps').click(); true`); await sleep(300);
     const r3 = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(process.env.SHOTS + '/tools.png', Buffer.from(r3.result.data, 'base64'));
-    await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Apps').click(); document.querySelector('#apps .app-tile[data-app=quickbooks]').click(); true`); await sleep(500);
+    await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations').click(); document.querySelector('#apps .app-tile[data-app=quickbooks]').click(); true`); await sleep(500);
     const r4 = await A.cmd('Page.captureScreenshot', { format: 'png' }); FS.writeFileSync(process.env.SHOTS + '/detail.png', Buffer.from(r4.result.data, 'base64'));
   }
   ok(!A.errors.length, 'no errors in the page: ' + A.errors.join(' | '));

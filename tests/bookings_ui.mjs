@@ -65,7 +65,7 @@ try {
   await A.until(`location.href.startsWith(${JSON.stringify(APP)}) && document.readyState === 'complete'`, 15000);
   await A.ev(`localStorage.setItem('column.token', ${JSON.stringify(JSON.stringify(a.token))}); location.reload(); true`);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && !!document.querySelector('#tabs [data-tab=apps]')`, 15000), 'Rico is in');
-  await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); [...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations')?.click(); true`);
   ok(await A.until(`document.querySelector('#apps .app-tile[data-app=calendly]')?.dataset.state === 'off' && document.querySelector('#apps .app-tile[data-app=caldotcom]')?.dataset.state === 'off'`), 'Calendly and Cal.com are live tiles, not connected: ' + await A.ev(`document.querySelector('#apps .app-tile[data-app=calendly]')?.dataset.state`));
   await A.tap(`document.querySelector('#apps .app-tile[data-app=calendly]')`);
   ok(await A.until(`document.querySelectorAll('#apps .bk-sec[data-app=calendly] .bk-connect').length === 2`), 'its page offers the team’s booking page and your own');
@@ -79,7 +79,7 @@ try {
   await sleep(300);
   // Its sign-in revoked in Calendly: Check again says so, and the tile says Needs attention (from the registry).
   fake.revoked = true;
-  await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); [...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations')?.click(); true`);
   await A.tap(`document.querySelector('#apps .app-tile[data-app=calendly]')`);
   await A.tap(`document.querySelector('#apps .bk-sec .bk-conn[data-scope=team] .bk-check')`);
   ok(await A.until(`/sign-in ran out/.test(document.querySelector('#apps .bk-sec .bk-conn[data-scope=team]')?.textContent || '')`), 'a revoked sign-in: the tile’s page says to connect again');

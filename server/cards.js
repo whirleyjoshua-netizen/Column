@@ -101,7 +101,7 @@ export function cardsModule({ db, save, readJson, send, rid, escHtml, brandOf, l
   async function route(req, res, parts, auth, ws, user) {
     if (parts[0] !== 'card') return null;
     const m = req.method;
-    if (!toolOn(ws, 'cards')) return send(res, 403, { error: 'Business cards are switched off for this team (Apps & Integrations → Tools).' });
+    if (!toolOn(ws, 'cards')) return send(res, 403, { error: 'Business cards are switched off for this team (Apps & Integrations → Kloomie apps).' });
     let c = mine(ws.id, auth.memberId);
     if (!parts[1]) {
       if (m === 'GET') return send(res, 200, c ? forOwner(c) : { ...draft(ws, auth.memberId, user), url: null, off: 'new', askOn: toolOn(ws, 'contacts') });

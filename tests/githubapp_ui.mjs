@@ -105,7 +105,7 @@ try {
   await A.shot('home-code');
 
   // The tile.
-  await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); true`);
+  await A.ev(`document.querySelector('#tabs [data-tab=apps]').click(); [...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations')?.click(); true`);
   ok(await A.until(`document.querySelector('#apps .app-tile[data-app=github]')?.dataset.state === 'on'`), 'the GitHub tile says Connected');
   await A.ev(`document.querySelector('#apps .app-tile[data-app=github]').click(); true`);
   ok(await A.until(`(() => { const d = document.querySelector('#apps .app-detail .gh-app'); return d && d.textContent.includes('Connected to atlas') && [...document.querySelectorAll('#apps .gh-repos .chip')].map((x) => x.textContent).join() === 'atlas/web,atlas/api'; })()`), 'its page shows the account and repositories');

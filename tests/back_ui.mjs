@@ -6,6 +6,8 @@ import { spawn } from 'node:child_process';
 const S = process.argv[2];
 const APP = 'http://127.0.0.1:4797/';
 const launch = (port, dir) => spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${S}/dk/${dir}`, '--no-first-run', '--window-size=1300,900', 'about:blank'], { stdio: 'ignore' });
+// A fresh profile each run: the app remembers the Apps tab last picked, and this test picks Integrations.
+FS.rmSync(`${S}/dk/chrome62`, { recursive: true, force: true });
 const chrome = launch(9362, 'chrome62');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -66,6 +68,13 @@ await back();
 ok(await A.until(home, 2000), 'and Back again: Home');
 // A level inside a page: an app's page, then Back is All apps, then Back is the page before.
 await A.tap(`document.querySelector('#tabs [data-tab=apps]')`);
+// It opens on Kloomie apps: a Kloomie app's page, then Back is All Kloomie apps.
+await A.until(`!!document.querySelector('#apps .kapp-tile[data-kapp=map] .kapp-name')`);
+await A.tap(`document.querySelector('#apps .kapp-tile[data-kapp=map] .kapp-name')`);
+ok(await A.until(`!!document.querySelector('#apps .kapp-detail')`), 'Map’s Kloomie app page opens');
+await back();
+ok(await A.until(`${shown('#apps')} && !document.querySelector('#apps .kapp-detail') && !!document.querySelector('#apps .kapp-tile')`, 2000), 'Back: All Kloomie apps, still on Apps');
+await A.ev(`[...document.querySelectorAll('#apps .apps-tabs button')].find((b) => b.textContent === 'Integrations').click(); true`);
 await A.until(`!!document.querySelector('#apps .app-tile[data-app=quickbooks]')`);
 await A.tap(`document.querySelector('#apps .app-tile[data-app=quickbooks]')`);
 ok(await A.until(`!!document.querySelector('#apps .app-back')`), 'QuickBooks’s page opens');

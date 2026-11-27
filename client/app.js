@@ -12160,7 +12160,7 @@
   const TOOL_ROWS = [['agents', 'Agents', 'Your team: Chief of Staff, Sales, Operations and Marketing'], ['sidekick', 'Sidekick', 'Plans campaigns with you'], ['docs', 'Docs', 'Write and share pages'], ['contacts', 'Contacts', 'Your customers and leads (owners and admins)'],
           ['email', 'Email', 'Campaign email from Outlook or Gmail'], ['folders', 'Folders', 'Files in folders'], ['signs', 'Signatures', 'Send PDFs to be signed'], ['bills', 'Finance', 'Bills, money in and out, budgets'],
           ['meetings', 'Meeting notes', 'Record a call, get the notes'], ['map', 'Map', 'Pins, routes and canvassing runs'], ['vault', 'Vault', 'Codes and logins, locked on your device'], ['projects', 'Boards', 'Jobs in columns: trades, software, client work and team projects'], ['cards', 'Business cards', 'Everyone’s own card to share by link, text, QR code or NFC'], ['news', 'News', 'Each person’s own news, if they turn it on in their tabs'], ['inventory', 'Inventory', 'Parts, materials and equipment: stock at each place, used on jobs, low-stock alerts'], ['whiteboard', 'Whiteboard', 'Plan visually together: stickies, shapes, arrows, frames and cards for real work']];
-  const APPS = { tab: store.get('appsTab', 'apps'), open: null, q: '', cat: 'all', loading: false, leads: null };
+  const APPS = { tab: store.get('appsTab', 'tools'), kapp: null, open: null, q: '', cat: 'all', loading: false, leads: null };
   const ZAPIER_INVITE = 'https://zapier.com/developer/public-invite/249576/3ce3c0fb9bd4e67c0b2ba97a95b5fdf1/';
   const APP_CATS = [['comms', 'Email & calendar'], ['storage', 'Files & docs'], ['crm', 'CRM & sales'], ['finance', 'Money & payments'], ['schedule', 'Scheduling & signatures'], ['field', 'Field service & trades'], ['marketing', 'Marketing & social'], ['dev', 'Software & dev'], ['people', 'HR & payroll'], ['auto', 'Forms & automation'], ['ai', 'AI']];
   // What a direct connection would do, for the apps that aren't built yet (docs/INTEGRATIONS-PLAN.md has the detail).
@@ -12413,7 +12413,7 @@
     closeTool();
     closeProjects();
     if (typeof to === 'string') { APPS.tab = 'apps'; APPS.open = to; }
-    else if (to?.tab) { APPS.tab = to.tab; APPS.open = null; }
+    else if (to?.tab) { APPS.tab = to.tab; APPS.open = null; APPS.kapp = to.kapp || null; }
     if (S.tab === 'apps') renderApps(true);
     else setTab('apps');
     $('#apps').scrollTop = 0;
@@ -12432,6 +12432,9 @@
     const hit = (a) => !q || `${a.name} ${a.blurb} ${a.id}`.toLowerCase().includes(q);
     const on = all.filter((a) => appState(a) === 'on');
     const out = [];
+    // Kloomie's own apps that match, in a row of their own, badged: nobody mistakes Inventory for a connection.
+    const kq = q ? Object.keys(KAPPS).filter((k) => `${kappName(k)} ${kappSub(k)} ${k}`.toLowerCase().includes(q)) : [];
+    if (kq.length) out.push(h('section', { class: 'apps-kloomie' }, h('h2', {}, 'Kloomie apps', h('small', {}, 'Made by Kloomie, nothing to connect')), h('div', { class: 'kapp-grid' }, kq.map(kappTile))));
     if (!q && APPS.cat === 'all') {
       out.push(h('section', { class: 'apps-connected' },
         h('h2', {}, 'Connected', h('small', {}, `${on.length} connected`)),
@@ -12494,20 +12497,98 @@
     return h('div', { class: 'app-detail', 'data-app': a.id }, back, top, trouble, does, main, st === 'on' ? whatNowCard(a) : null,
       h('button', { class: 'btn app-back-end', onclick: appsBack }, '‹ Back to all apps'));
   }
-  function toolsTiles() {
-    const tools = S.workspace?.tools || {};
+  // ----- Kloomie apps (the owner, 2026-11-27) -----
+  // Kloomie's own apps, told apart from Integrations (other companies' apps): Kloomie's line icons with a "By Kloomie"
+  // badge, Add / Open (an integration says Connect), and a page each. Owners and admins add and remove them for the
+  // whole team (the server's PATCH /workspace tools checks); free for now. Adding one is the team's tool switch
+  // (workspace.tools); removing hides it for everyone and deletes nothing.
+  const KAPP_GROUPS = [['work', 'Run your work'], ['field', 'Out in the field'], ['money', 'Money & paperwork'], ['team', 'AI & your team'], ['own', 'Each person’s own']];
+  const KAPPS = {
+    projects: { group: 'work', where: 'Workspace → Boards', member: 'projects', does: ['Jobs, projects and anything you track, in columns you set', 'Templates for trades, software, client work and team projects', 'Each record with its page, timeline and connections'] },
+    contacts: { group: 'work', where: 'Workspace → Contacts', member: 'contacts', does: ['Your customers and leads in one list, with groups (vendors, inspectors…)', 'Lead forms and connected apps fill it in', 'Each contact’s jobs, messages and history'] },
+    docs: { group: 'work', where: 'Workspace → Folders & Docs', member: 'docs', does: ['Pages with blocks, sub-pages and templates', 'Share a doc, or ask questions of your docs', 'Import from Notion'] },
+    folders: { group: 'work', where: 'Workspace → Folders & Docs', member: 'docs', does: ['Files in folders, with thumbnails', 'Drag files in from stacks and chat', 'Share a folder or ask for files by link'] },
+    whiteboard: { group: 'work', where: 'Tools → Whiteboard', member: 'whiteboard', does: ['Stickies, shapes, arrows and frames, together and live', 'Cards for real jobs and tasks on the board', 'Boards for the team and your own'] },
+    inventory: { group: 'field', where: 'Tools → Inventory', member: 'inventory', does: ['Stock at each place, down to the bin, with QR labels', 'Parts used on jobs come out of stock', 'Low-stock alerts, orders and requests from the team'] },
+    map: { group: 'field', where: 'Tools → Map', member: 'map', does: ['Pins, routes and canvassing runs', 'Today’s jobs on a map', 'A mileage log: by GPS, job route or address'] },
+    meetings: { group: 'field', where: 'Tools → Meetings', member: 'meetings', does: ['Record a call or meeting', 'Get the notes and the to-dos', 'Turn them into tasks'] },
+    bills: { group: 'money', where: 'Tools → Finance', member: 'bills', does: ['Bills, money in and out, and budgets', 'Receipts and price lists', 'Job costing and reports'] },
+    signs: { group: 'money', where: 'Settings → Business → Signatures', does: ['Send a PDF to be signed', 'See who’s opened and signed it', 'Signed copies kept with the job'] },
+    email: { group: 'money', where: 'Tools → Email', does: ['Campaign email from your own Outlook or Gmail', 'Lists from your contacts', 'Who opened and replied'] },
+    cards: { group: 'money', where: 'Settings → Business → Business card', does: ['Everyone’s own card at a link of their own', 'Share it by text, QR code or NFC', 'People who save it land in Contacts as leads'] },
+    agents: { group: 'team', where: 'The sidebar → Agents', does: ['A Chief of Staff, Sales, Operations and a Marketing Manager', 'They work through Kloomie as you, with your permissions', 'Edit their jobs, or build your own'] },
+    sidekick: { group: 'team', where: '✦ Sidekick, at the top of every page', does: ['One assistant on every page', 'Plans campaigns, money, invoices and sign-offs with you', 'Drafts first; nothing happens until you accept'] },
+    vault: { group: 'own', where: 'Tools → Vault', member: 'vault', does: ['Codes and logins, locked on your device', 'Only you can open your vault', 'Quick save from chat with /vault'] },
+    news: { group: 'own', where: 'Home (each person turns it on in Settings → General)', does: ['News from the publishers you pick', 'Learns from 👍 and 👎', 'A short brief on your own AI key'] },
+  };
+  const kappName = (k) => TOOL_ROWS.find((r) => r[0] === k)?.[1] || k;
+  const kappSub = (k) => TOOL_ROWS.find((r) => r[0] === k)?.[2] || '';
+  const kappOn = (k) => S.workspace?.tools?.[k] !== false;
+  const KAPP_BADGE = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="8" fill="currentColor"/><path d="M4.6 8.3 7 10.6l4.4-5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const kappBadge = () => h('span', { class: 'kapp-badge', title: 'Made by Kloomie' }, h('i', { html: KAPP_BADGE }), 'By Kloomie');
+  const kappIcon = (k) => h('span', { class: 'kapp-ic', html: TAB_IC[k] || TAB_IC.tools });
+  function kappSet(k, on) {
+    return api('PATCH', '/workspace', { tools: { [k]: on } }).then((w) => {
+      S.workspace = w;
+      toast(on ? `${kappName(k)} is added for your team` : `${kappName(k)} is removed. Nothing in it was deleted`);
+      renderTabs();
+      renderApps(true);
+    }, (e) => toast(e.message));
+  }
+  function kappOpen(k) {
+    if (k === 'sidekick') return openDock('plan');
+    if (k === 'agents') return agOpen('team');
+    if (k === 'folders') { store.set('docsSide', 'folders'); return openBarItem('docs'); }
+    if (BAR_ITEMS[k]) return openBarItem(k);
+    openTool(k);
+  }
+  function kappGo(k) {
+    APPS.tab = 'tools';
+    store.set('appsTab', 'tools');
+    APPS.listTop = $('#apps').scrollTop;
+    APPS.kapp = k;
+    renderApps(true);
+    $('#apps').scrollTop = 0;
+  }
+  function kappTile(k) {
+    const on = kappOn(k), admin = amAdmin();
+    const act = on ? h('button', { class: 'btn small kapp-act', onclick: (e) => { e.stopPropagation(); kappOpen(k); } }, 'Open')
+      : admin ? h('button', { class: 'btn small primary-btn kapp-act', onclick: (e) => { e.stopPropagation(); e.currentTarget.disabled = true; kappSet(k, true); } }, 'Add') : null;
+    return h('div', { class: 'kapp-tile', 'data-kapp': k, 'data-state': on ? 'on' : 'off', role: 'button', tabindex: '0', onclick: () => kappGo(k), onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); kappGo(k); } } },
+      kappIcon(k),
+      h('span', { class: 'kapp-t' }, h('b', { class: 'kapp-name' }, kappName(k)), kappBadge(), h('span', { class: 'kapp-sub' }, kappSub(k))),
+      h('span', { class: 'kapp-end' }, h('span', { class: 'app-st ' + (on ? 'st-on' : 'st-soon') }, h('i'), on ? 'Added' : 'Not added'), act));
+  }
+  function kappsPane() {
+    const k = APPS.kapp && KAPPS[APPS.kapp] ? APPS.kapp : (APPS.kapp = null);
+    if (k) return [kappDetail(k)];
     const admin = amAdmin();
-    return [h('p', { class: 'apps-lead' }, admin ? 'Turn on the tools your team uses. Turning one off hides it for everyone; nothing in it is deleted.' : 'The tools your team uses. Owners and admins turn them on and off.'),
-      h('div', { class: 'tool-grid' }, TOOL_ROWS.map(([k, name, sub]) => {
-        const input = h('input', { type: 'checkbox', 'aria-label': name });
-        input.checked = tools[k] !== false;
-        input.disabled = !admin;
-        input.addEventListener('change', () => api('PATCH', '/workspace', { tools: { [k]: input.checked } }).then((w) => { S.workspace = w; }, (e) => { input.checked = !input.checked; toast(e.message); }));
-        return h('div', { class: 'tool-tile', 'data-tool': k, 'data-on': String(tools[k] !== false) },
-          h('span', { class: 'tool-tile-ic', html: TAB_IC[k] || TAB_IC.tools }),
-          h('span', { class: 'tool-tile-t' }, h('b', {}, name), h('span', {}, sub)),
-          h('label', { class: 'toggle' }, input, h('i')));
-      }))];
+    return [h('p', { class: 'apps-lead' }, admin ? 'Apps made by Kloomie, free with your plan. Add one and it’s there for your whole team; remove it and it’s hidden, with nothing deleted.' : 'Apps made by Kloomie that your team uses. Owners and admins add and remove them.'),
+      ...KAPP_GROUPS.map(([g, label]) => {
+        const ks = Object.keys(KAPPS).filter((x) => KAPPS[x].group === g);
+        return h('section', { class: 'kapps-group', 'data-group': g }, h('h2', {}, label, h('small', {}, `${ks.filter(kappOn).length} of ${ks.length} added`)), h('div', { class: 'kapp-grid' }, ks.map(kappTile)));
+      })];
+  }
+  function kappDetail(k) {
+    const d = KAPPS[k], on = kappOn(k), admin = amAdmin();
+    const back = () => { APPS.kapp = null; renderApps(true); $('#apps').scrollTop = APPS.listTop || 0; };
+    const bar = h('div', { class: 'app-bar' }, h('button', { class: 'btn app-back kapp-back', onclick: back }, '‹ All Kloomie apps'), h('span', { class: 'app-bar-t' }, kappName(k)));
+    const top = h('div', { class: 'app-detail-top kapp-top' }, kappIcon(k), h('div', { class: 'app-detail-t' }, h('h1', {}, kappName(k)), h('p', {}, kappSub(k)), h('div', { class: 'kapp-tags' }, kappBadge(), h('span', { class: 'kapp-free' }, 'Free'))),
+      h('span', { class: 'app-st ' + (on ? 'st-on' : 'st-soon') }, h('i'), on ? 'Added' : 'Not added'));
+    const remove = h('button', { class: 'btn kapp-remove', 'data-label': '1', onclick: (e) => confirmClick(e.currentTarget, () => kappSet(k, false)) }, 'Remove from workspace');
+    const act = h('div', { class: 'app-card kapp-actions' },
+      on ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn kapp-open', onclick: () => kappOpen(k) }, `Open ${kappName(k)}`), admin ? remove : null)
+        : admin ? h('div', { class: 'btns' }, h('button', { class: 'btn primary-btn kapp-add', onclick: (e) => { e.currentTarget.disabled = true; kappSet(k, true); } }, `Add ${kappName(k)}`)) : null,
+      h('p', { class: 'day-hint' }, admin ? (on ? 'Removing it hides it for everyone. Nothing in it is deleted, and adding it again brings it all back.' : 'Adding it puts it in front of your whole team.') : on ? 'An owner or admin can remove it for the team.' : 'Not added for your team. Ask an owner or admin to add it.'));
+    const membersOk = !d.member || S.workspace?.memberAccess?.[d.member] !== false;
+    const who = h('div', { class: 'app-card kapp-who' }, h('h2', {}, 'Who can use it'),
+      h('p', {}, d.member ? (membersOk ? 'Everyone on the team, members included.' : 'Owners and admins. It’s switched off for members.') : 'Everyone on the team.'),
+      d.member && admin ? h('button', { class: 'btn small', onclick: () => openSettings('access', '.access-sec') }, 'What members can use') : null);
+    return h('div', { class: 'kapp-detail', 'data-kapp': k }, bar, top, act,
+      h('div', { class: 'app-card' }, h('h2', {}, 'What it does'), h('ul', { class: 'app-does' }, d.does.map((x) => h('li', {}, x)))),
+      h('div', { class: 'app-card kapp-where' }, h('h2', {}, 'Where it is'), h('p', {}, on ? d.where : `Once it’s added: ${d.where}`)),
+      who,
+      h('button', { class: 'btn app-back-end', onclick: back }, '‹ Back to all Kloomie apps'));
   }
   function devPane() {
     if (!amAdmin()) return [h('div', { class: 'app-card' }, h('p', {}, 'Owners and admins set up API keys, webhooks and lead forms.'))];
@@ -12525,11 +12606,11 @@
     if (!open) APPS.open = null;
     const q = h('input', { class: 'apps-q', type: 'search', placeholder: 'Search apps…', 'aria-label': 'Search apps', value: APPS.q });
     q.addEventListener('input', () => { APPS.q = q.value; root.querySelector('.apps-list')?.replaceWith(appsList()); });
-    const tabs = [['apps', 'Apps'], ['tools', 'Tools'], ['dev', 'Developers']];
+    const tabs = [['tools', 'Kloomie apps'], ['apps', 'Integrations'], ['dev', 'Developers']];
     root.replaceChildren(h('div', { class: 'apps-wrap' },
-      h('header', { class: 'apps-head' }, h('div', {}, h('h1', {}, 'Apps & Integrations'), h('p', {}, 'Connect the apps you already use, and pick the tools your team works in.')), APPS.tab === 'apps' && !open ? q : null),
-      h('div', { class: 'apps-tabs', role: 'tablist' }, tabs.map(([k, label]) => h('button', { class: APPS.tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(APPS.tab === k), onclick: () => { APPS.tab = k; APPS.open = null; store.set('appsTab', k); if (k === 'dev') { INT.keys = null; INT.hooks = null; } renderApps(true); root.scrollTop = 0; } }, label))),
-      ...[].concat(APPS.tab === 'tools' ? toolsTiles() : APPS.tab === 'dev' ? devPane() : open ? appDetail(open) : appsDirectory())));
+      h('header', { class: 'apps-head' }, h('div', {}, h('h1', {}, 'Apps & Integrations'), h('p', {}, 'Add Kloomie’s own apps, and connect the apps you already use.')), APPS.tab === 'apps' && !open ? q : null),
+      h('div', { class: 'apps-tabs', role: 'tablist' }, tabs.map(([k, label]) => h('button', { class: APPS.tab === k ? 'on' : null, role: 'tab', 'aria-selected': String(APPS.tab === k), onclick: () => { APPS.tab = k; APPS.open = null; APPS.kapp = null; store.set('appsTab', k); if (k === 'dev') { INT.keys = null; INT.hooks = null; } renderApps(true); root.scrollTop = 0; } }, label))),
+      ...[].concat(APPS.tab === 'tools' ? kappsPane() : APPS.tab === 'dev' ? devPane() : open ? appDetail(open) : appsDirectory())));
     root.scrollTop = keep;
   }
 
@@ -14829,7 +14910,7 @@
   }
   // The list: every board this person can see, and Deleted.
   async function openWhiteboards() {
-    if (!wbCan()) return toast(toolOn('whiteboard') ? 'Your team’s owners and admins have turned Whiteboard off for members.' : 'Whiteboard is switched off for this team (Apps & Integrations → Tools).');
+    if (!wbCan()) return toast(toolOn('whiteboard') ? 'Your team’s owners and admins have turned Whiteboard off for members.' : 'Whiteboard is switched off for this team (Apps & Integrations → Kloomie apps).');
     if (WB.page) { WB.page.ed.destroy(); WB.page = null; wbTell(); }
     const v = wbView();
     v.replaceChildren(h('p', { class: 'day-hint wb-loading' }, 'Loading…'));
@@ -21974,7 +22055,7 @@
     const body = [
       h('p', { class: 'day-hint' }, 'In Notion: ', h('b', {}, 'Settings → Export'), ', choose ', h('b', {}, 'Markdown & CSV'), ', include subpages and ', h('b', {}, 'Create folders for subpages'), ', then upload the .zip it gives you here.'),
       h('p', { class: 'day-hint' }, 'Every page becomes a doc, with the pages inside it inside it. Pictures and files come too, and links between pages still work. ',
-        projOn ? 'Databases become projects in Projects, each row a record with its page.' : 'Databases become tables in a doc' + (amAdmin() ? ' (turn on Boards in Apps & Integrations → Tools first to bring them in as projects you can sort, filter and put on a board).' : '.')),
+        projOn ? 'Databases become projects in Projects, each row a record with its page.' : 'Databases become tables in a doc' + (amAdmin() ? ' (turn on Boards in Apps & Integrations → Kloomie apps first to bring them in as projects you can sort, filter and put on a board).' : '.')),
       h('label', { class: 'field' }, h('span', {}, 'The export'), file),
       h('label', { class: 'field' }, h('span', {}, 'Who sees it'), who),
       status,
@@ -27109,13 +27190,13 @@
       if (admin) {
         // What members can use (2026-11-20): each Workspace tab and tool, and the team's schedule. Off, the server
         // refuses it to members and its data stays off their devices; owners and admins keep everything. A tool off
-        // for the whole team (Apps & Integrations → Tools) is off for everyone either way.
+        // for the whole team (Apps & Integrations → Kloomie apps) is off for everyone either way.
         const acc = ws.memberAccess || {};
         const set = (k, on, input) => api('PATCH', '/workspace', { memberAccess: { [k]: on } }).then((w) => { S.workspace = w; toast(on ? 'Members can use it now' : 'Off for members'); }, (e) => { input.checked = !on; toast(e.message); });
-        // A tool off for the whole team (Apps & Integrations → Tools) is off for everyone: its switch is greyed, with a tag.
+        // A tool off for the whole team (Apps & Integrations → Kloomie apps) is off for everyone: its switch is greyed, with a tag.
         const row = (k, name, sub, team = true) => {
           const r = toggleRow(name, sub, team && acc[k] !== false, (on, input) => set(k, on, input));
-          if (!team) { r.classList.add('off-team'); r.querySelector('input').disabled = true; r.querySelector('span').append(h('em', { class: 'off-tag', title: 'Turn it on in Apps & Integrations → Tools' }, 'Off for the team')); }
+          if (!team) { r.classList.add('off-team'); r.querySelector('input').disabled = true; r.querySelector('span').append(h('em', { class: 'off-tag', title: 'Turn it on in Apps & Integrations → Kloomie apps' }, 'Off for the team')); }
           return r;
         };
         P('access', h('section', { class: 'access-sec' }, h('h3', {}, 'What members can use'),
@@ -27142,7 +27223,7 @@
       }
       // Tools moved to Apps & Integrations (2026-11-20); help and older videos still send people here.
       if (admin) P('teamset', W(950, h('section', { class: 'moved-sec' }, h('h3', {}, 'Moved to their own pages'),
-        h('div', { class: 'srow apps-moved' }, h('span', {}, 'Tools your team uses', h('small', {}, 'Apps & Integrations → Tools')), h('button', { class: 'btn', onclick: () => openApps({ tab: 'tools' }) }, 'Open')),
+        h('div', { class: 'srow apps-moved' }, h('span', {}, 'Tools your team uses', h('small', {}, 'Apps & Integrations → Kloomie apps')), h('button', { class: 'btn', onclick: () => openApps({ tab: 'tools' }) }, 'Open')),
         h('div', { class: 'srow auto-moved' }, h('span', {}, 'Automations', h('small', {}, 'Workspace → Automations')), h('button', { class: 'btn', onclick: () => { s.classList.add('hidden'); openBarItem('automations'); } }, 'Open')))));
       if (admin) P('members', () => inviteSection());
       P('roles', () => rolesSection(peopleCall));

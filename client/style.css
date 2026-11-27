@@ -5239,3 +5239,32 @@ body:not(.wide) .cc-phases { padding: 12px 10px; }
 .web-req-edit input { flex: 1; min-width: 140px; }
 @media (max-width: 640px) { .web-steps { grid-template-columns: repeat(2, 1fr); } }
 .web-ask .web-care input { margin-top: 3px; flex: none; }
+
+/* Kloomie apps (2026-11-27): Kloomie's own, told apart from Integrations by its own icons, a By Kloomie badge and Add / Open. */
+.kapps-group { margin: 0 0 26px; }
+.kapps-group h2, .apps-kloomie h2 { display: flex; align-items: baseline; gap: 10px; font-size: 16px; margin: 0 0 12px; }
+.kapps-group h2 small, .apps-kloomie h2 small { font-size: 13px; font-weight: 500; color: var(--muted); }
+.apps-kloomie { margin: 0 0 26px; padding: 14px; border-radius: 14px; background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.kapp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+body:not(.wide) .kapp-grid { grid-template-columns: 1fr; }
+.kapp-tile { display: flex; align-items: center; gap: 14px; min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card, #fff); cursor: pointer; transition: border-color .12s, box-shadow .12s; }
+.kapp-tile:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(0,0,0,.07); }
+.kapp-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kapp-ic { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.kapp-ic svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.kapp-t { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; flex: 1; min-width: 0; }
+.kapp-name { flex-basis: 100%; font-size: 15px; }
+.kapp-sub { flex-basis: 100%; font-size: 13px; line-height: 1.4; color: var(--muted); }
+.kapp-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 3px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.kapp-badge i { display: inline-flex; width: 13px; height: 13px; }
+.kapp-badge svg { width: 13px; height: 13px; }
+.kapp-end { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: none; }
+.kapp-end .app-st { margin: 0; padding: 0; font-size: 12.5px; }
+.kapp-tile[data-state=off] .kapp-ic { background: var(--bg); color: var(--muted); }
+.kapp-top .kapp-ic { width: 64px; height: 64px; border-radius: 16px; }
+.kapp-top .kapp-ic svg { width: 34px; height: 34px; }
+.kapp-tags { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.kapp-free { font-size: 12px; font-weight: 600; color: #15803d; }
+.kapp-detail { display: flex; flex-direction: column; gap: 16px; }
+.kapp-actions .btns { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.kapp-remove.confirm { border-color: var(--danger); color: var(--danger); }
