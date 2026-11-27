@@ -82,9 +82,10 @@ try {
   await A.ev(`document.querySelector('[aria-label="All campaigns"]')?.click(); true`);
   await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === '+ New')`);
   await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === '+ New')`);
-  await A.until(`!!document.querySelector('#sheet .cb-stages')`);
+  await A.until(`!!document.querySelector('#sheet .cb-kinds')`);
+  await A.tap(`document.querySelector('#sheet .cb-kind[data-kind=campaign]')`); // + New asks Checklist or Campaign first (2026-11-27)
+  await A.ev(`document.querySelector('#sheet details.cb-more').open = true; true`); // launch is under More options
   await A.ev(`(() => { const e = document.querySelector('#sheet .cb-name'); e.value = 'Door SOP'; e.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
-  await A.tap(`document.querySelector('#sheet .cb-stage[data-stage="3"]')`);
   await A.tap(`document.querySelector('#sheet [data-launch=test] input')`);
   ok(await A.until(`!!document.querySelector('#sheet .cb-testers .chip.on') && document.querySelector('#sheet .cb-sum').textContent.includes('Starts as a test run')`), 'Launch: Start with a test run, with testers');
   await A.ev(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Make the campaign').click(); true`);

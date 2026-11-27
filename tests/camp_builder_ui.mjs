@@ -63,6 +63,8 @@ try {
   await A.ev(`document.querySelector('#tabs [data-tab=camps]').click(); true`);
   await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === '+ New')`);
   ok(await A.until(`!!document.querySelector('#sheet .sheet.camp-builder .cb-grid')`), 'New campaign opens the builder');
+  await A.tap(`document.querySelector('#sheet .cb-kind[data-kind=campaign]')`); // + New asks Checklist or Campaign first (2026-11-27)
+  await A.ev(`document.querySelector('#sheet details.cb-more').open = true; true`); // the job, people, logging and money are under More options
   ok(await A.ev(`(() => { const s = document.querySelector('#sheet .sheet').getBoundingClientRect(); const side = document.querySelector('#side')?.getBoundingClientRect(); return s.width > innerWidth * 0.6 && s.height >= innerHeight - 2 && (!side || !side.width || s.left >= side.right - 1); })()`), 'full size, beside the sidebar (not a bottom sheet)');
   ok(await A.ev(`(() => { const m = document.querySelector('#sheet .cb-main').getBoundingClientRect(), s = document.querySelector('#sheet .cb-sum').getBoundingClientRect(); return s.left >= m.right - 1 && s.width > 200; })()`), 'on a computer: the form, with the summary beside it');
   ok(await A.ev(`['What it is', 'What it’s for', 'Who’s on it', 'Steps', 'What gets logged', 'Money'].every((x) => [...document.querySelectorAll('#sheet .cb-sec h3')].some((h) => h.textContent === x))`), 'it covers what it is, the job, people and roles, steps, logging and money');
@@ -72,15 +74,11 @@ try {
   await fill(`document.querySelector('#sheet .cb-name')`, 'Bill Nye furnace swap');
   await fill(`[...document.querySelectorAll('#sheet .cb-sec select')].find((s) => [...s.options].some((o) => o.value === ${JSON.stringify(job.id)}))`, job.id);
   await A.ev(`(() => { const s = [...document.querySelectorAll('#sheet label')].find((l) => l.textContent.startsWith('Runs it')).querySelector('select'); s.value = ${JSON.stringify(sam.memberId || '')} || [...s.options].find((o) => o.textContent.includes('Sam'))?.value; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-  // Four stages (2026-11-20): Foundation, Structure, Execution, Resources & launch, one at a time.
-  ok(await A.ev(`[...document.querySelectorAll('#sheet .cb-stage')].map((b) => b.textContent.replace(/^\\d/, '')).join('|') === 'Foundation|Structure|Execution|Resources & launch' && document.querySelector('#sheet .cb-name').offsetParent && !document.querySelector('#sheet .cb-budget').offsetParent`), 'the builder is in four stages, one shown at a time');
-  await A.tap(`document.querySelector('#sheet .cb-next')`);
-  ok(await A.until(`!!document.querySelector('#sheet .cb-add-step')?.offsetParent && document.querySelector('#sheet .cb-stage.on').dataset.stage === '1'`), 'Next goes to Structure (the steps)');
-  await A.tap(`document.querySelector('#sheet .cb-stage[data-stage="2"]')`);
+  // One page (2026-11-27): no stages; what it is and its steps up top, the rest under More options.
+  ok(await A.ev(`!document.querySelector('#sheet .cb-stage') && !!document.querySelector('#sheet .cb-name').offsetParent && !!document.querySelector('#sheet .cb-add-step').offsetParent`), 'one page: no stages, the name and steps on it');
   await A.tap(`document.querySelector('#sheet .cb-add-role')`);
   await fill(`document.querySelector('#sheet .cb-role-h input')`, 'Installer');
   await A.tap(`[...document.querySelectorAll('#sheet .cb-role .chip')].find((b) => b.textContent.startsWith('Sam'))`);
-  await A.tap(`document.querySelector('#sheet .cb-stage[data-stage="1"]')`);
   await A.tap(`document.querySelector('#sheet .cb-add-step')`);
   await fill(`document.querySelectorAll('#sheet .cb-step input')[0]`, 'Measure');
   ok(await A.until(`!!document.querySelector('#sheet .cb-step select')`), 'with the job picked, a step can finish one of its stages');
@@ -88,8 +86,7 @@ try {
   await A.tap(`document.querySelector('#sheet .cb-add-step')`);
   await fill(`document.querySelectorAll('#sheet .cb-step input')[1]`, 'Install');
   await A.ev(`(() => { const c = [...document.querySelectorAll('#sheet label.pick')].find((l) => l.textContent.startsWith('Work it in order')).querySelector('input'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-  await A.tap(`document.querySelector('#sheet .cb-stage[data-stage="3"]')`);
-  ok(await A.ev(`[...document.querySelectorAll('#sheet .cb-launch-opt')].map((x) => x.dataset.launch).join() === 'live,test' && document.querySelector('#sheet [data-launch=live] input').checked`), 'the last stage asks: go live now, or start with a test run');
+  ok(await A.ev(`[...document.querySelectorAll('#sheet .cb-launch-opt')].map((x) => x.dataset.launch).join() === 'live,test' && document.querySelector('#sheet [data-launch=live] input').checked`), 'More options asks: go live now, or start with a test run');
   await fill(`document.querySelector('#sheet .cb-budget')`, '1500');
   ok(await A.until(`(() => { const s = document.querySelector('#sheet .cb-sum').textContent; return s.includes('Bill Nye furnace swap') && s.includes('For the job Bill Nye · furnace') && s.includes('Sam Reed runs it') && s.includes('Installer: Sam Reed') && s.includes('2 steps, in order') && s.includes('Budget $1500'); })()`), 'the summary keeps up: name, job, who runs it, the role, 2 steps in order, the budget');
 
@@ -136,6 +133,8 @@ try {
   await A.ev(`(() => { const b = [...document.querySelectorAll('#camps button')].find((x) => x.getAttribute('aria-label') === 'All campaigns' || x.textContent.includes('All campaigns')); b?.click(); return true; })()`);
   await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === '+ New')`);
   await A.until(`!!document.querySelector('#sheet .camp-builder')`);
+  await A.tap(`document.querySelector('#sheet .cb-kind[data-kind=campaign]')`); // + New asks Checklist or Campaign first (2026-11-27)
+  await A.ev(`document.querySelector('#sheet details.cb-more').open = true; true`);
   ok(await A.ev(`[...document.querySelectorAll('#sheet .cb-tabs button')].map((b) => b.textContent).join('|') === 'Summary|✦ Sidekick builds it'`), 'beside the form: Summary, or Sidekick builds it');
   await fill(`document.querySelector('#sheet .cb-budget')`, '900');
   await A.tap(`document.querySelector('#sheet .cb-tabs [data-side=sk]')`);

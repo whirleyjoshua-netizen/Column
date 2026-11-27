@@ -156,8 +156,8 @@ try {
   await A.until(`[...document.querySelectorAll('#camps button')].some((b) => b.textContent === '+ New')`);
   await A.tap(`[...document.querySelectorAll('#camps button')].find((b) => b.textContent === '+ New')`);
   await A.until(`!!document.querySelector('#sheet .sheet.camp-builder .cb-grid')`);
+  await A.tap(`document.querySelector('#sheet .cb-kind[data-kind=campaign]')`); // + New asks Checklist or Campaign first (2026-11-27)
   await A.ev(`(() => { const e = document.querySelector('#sheet .cb-name'); e.value = 'Fall push'; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-  await A.tap(`document.querySelector('#sheet .cb-stage[data-stage="3"]')`);
   ok(await A.until(`/Start from a sketch/.test(document.querySelector('#sheet .cb-board-pick')?.textContent || '')`), 'the builder offers Start from a sketch');
   await A.ev(`document.querySelector('#sheet .cb-board-pick input').click(); true`);
   ok(await A.ev(`document.querySelector('#sheet .cb-board-pick input').checked`), 'ticked');
