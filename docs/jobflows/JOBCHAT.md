@@ -178,7 +178,7 @@ jobs_tab_ui, member_access_ui.
    it on sets `ws.jobChatsSince = now` (each time), so jobs made while it was off don't get one afterwards (only on
    demand). Turning it off stops both the hook and the sweep; feeds already made stay.
 
-## 10. Checkpoint 2: the tests (written first; on `jobchat` before any server change: 64 of jobchat.mjs's checks and
+## 10. Checkpoint 2: the tests (written first; on `jobchat` before any server change: 67 of jobchat.mjs's checks and
 15 of jobchat_ui.mjs's fail, log in docs/jobflows/jobchat-checkpoint2.log)
 Shapes the tests fix:
 - `PATCH /workspace { jobChats }` → `workspace.jobChats` (true by default). Chat folders carry `jobs: true` / `stacks: true`.
@@ -208,3 +208,4 @@ the page and the drop lands nowhere in it.
 Added: the automation's job checked by its record and the name it was given; Ask over an archived chat (found for
 someone on the job, nothing for a member who isn't). §8.9 corrected: the app's search is over what it has loaded, so
 "search" for archived chats means Ask.
+- Ask's positive case checks the archived doc is among the sources sent with Mia's question (a stand-in AI, port 5271), and that nothing reaches the AI for Sam. Checkpoint 2 APPROVED (round 3).

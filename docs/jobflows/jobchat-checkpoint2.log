@@ -63,6 +63,7 @@ PASS Mia (in it) does
 FAIL the feed renamed: its stack follows
 PASS asking again never swaps in another stack
 FAIL the feed deleted: its stack and files go with it
+FAIL the automation made the job (its record, with the name it was given): undefined
 FAIL a job an automation makes gets one feed, one stack, linked, the job pinned
 PASS (an older job with no chat)
 FAIL Move my jobs here: the moved job gets its feed, stack and pin 
@@ -84,6 +85,8 @@ FAIL GET /jobs/:id/chat has both
 PASS own team: Sam (not on it) can’t read the archived chat
 PASS or change a message in it
 FAIL Mia (on it) can
+PASS Ask: Sam (not on it) finds nothing of the archived chat, and nothing goes to the AI: {"answer":"I couldn’t find anything about that in the docs and records you can see.","sources":[]}
+FAIL Mia (on it): the archived chat’s doc is a source sent with her question: 
 FAIL (reopened by a message)
 FAIL moved back from the last stage: stays open
 PASS finished again: archived again (a new finish)
@@ -107,7 +110,7 @@ Data: /Users/premiershades/column-jobflows/dk/jobchat/db.json
   Data stored in /Users/premiershades/column-jobflows/dk/jobchat
 
 
-jobchat: 64 failed
+jobchat: 66 failed
 FAIL a feed has All / Chat / Files tabs
 PASS Chat: the message, not the note in its Files
 FAIL Files: the note, not the message

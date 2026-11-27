@@ -14,11 +14,24 @@ const DIR = S + '/dk/jobchat';
 fs.rmSync(DIR, { recursive: true, force: true });
 fs.mkdirSync(DIR, { recursive: true });
 const PORT = 5269, B = `http://127.0.0.1:${PORT}`;
+// A stand-in AI (port 5271): keeps what Ask sends it, answers with nothing used.
+import http from 'node:http';
+const AI_PORT = 5271, F = `http://127.0.0.1:${AI_PORT}`;
+let aiSaw = [];
+const fake = http.createServer((req, res) => {
+  let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url.startsWith('/v1/models')) return res.end(JSON.stringify({ data: [{ id: 'claude-test', display_name: 'Test', type: 'model', created_at: '2026-01-01T00:00:00Z' }], has_more: false }));
+    aiSaw.push(b);
+    res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'claude-test', content: [{ type: 'text', text: JSON.stringify({ answer: 'Nothing.', used: [] }) }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }));
+  });
+});
+await new Promise((r) => fake.listen(AI_PORT, '127.0.0.1', r));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const ok = (c, msg) => { console.log((c ? 'PASS ' : 'FAIL ') + msg); if (!c) fails++; };
 const until = async (f, ms = 4000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await f()) return true; await sleep(100); } return false; };
-const env = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test' };
+const env = { ...process.env, PORT: String(PORT), PUBLIC_URL: B, DATA_DIR: DIR, MAIL_OUTBOX: '1', RESEND_API_KEY: '', DATABASE_URL: '', STRIPE_SECRET_KEY: '', STRIPE_PRICE: '', SKIP_SETUP: '1', NODE_ENV: 'test', ANTHROPIC_BASE_URL: F };
 let srv;
 const start = async () => {
   srv = spawn('node', ['index.js'], { cwd: new URL('../server', import.meta.url).pathname, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -316,10 +329,14 @@ try {
   ok(r.status === 200 && JSON.stringify(r.body?.items || []).includes('ARCMSG'), 'Mia (on it) can');
   // Ask (the server's search over docs and records): an archived chat's doc is found for whoever sees the job only.
   const NONE = /couldn’t find anything/;
+  await sam('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
+  await mia('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });
+  aiSaw = [];
   r = await sam('POST', '/ai/ask', { q: 'ARCFILE' });
-  ok(NONE.test(r.body?.answer || '') && !JSON.stringify(r.body || {}).includes('ARCFILE in'), 'Ask: Sam (not on it) finds nothing of the archived chat: ' + JSON.stringify(r.body).slice(0, 120));
+  ok(NONE.test(r.body?.answer || '') && !aiSaw.length && !JSON.stringify(r.body || {}).includes('ARCFILE in'), 'Ask: Sam (not on it) finds nothing of the archived chat, and nothing goes to the AI: ' + JSON.stringify(r.body).slice(0, 120));
+  aiSaw = [];
   r = await mia('POST', '/ai/ask', { q: 'ARCFILE' });
-  ok(!NONE.test(r.body?.answer || ''), 'Mia (on it) gets past “nothing found” (a source was found): ' + JSON.stringify(r.body).slice(0, 120));
+  ok(aiSaw.some((x) => x.includes('ARCFILE in files')), 'Mia (on it): the archived chat’s doc is a source sent with her question: ' + String(aiSaw[0] || r.body?.error || '').slice(0, 120));
   await rico('PATCH', '/workspace', { visibility: 'all' });
   // A second finish after it was reopened archives it again; the first finish doesn't, twice.
   await rico('POST', '/items', { type: 'message', text: 'reopen it', channelId: arcFeed?.id });
@@ -383,6 +400,7 @@ try {
   fails++;
 } finally {
   for (const s of sockets) try { s.close(); } catch {}
+  fake.close();
   await stop().catch(() => {});
 }
 if (fails) console.log(srv.log.slice(-1500));
