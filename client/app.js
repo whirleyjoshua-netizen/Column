@@ -2237,7 +2237,8 @@
       const hit = (t) => !s || t.toLowerCase().includes(s);
       const cap = s ? 20 : 6;
       const groups = [
-        ['Stacks', S.workspace.stacks.filter((x) => hit(x.name)).map((x) => ({ type: 'stack', id: x.id, label: x.name, icon: I.stack, sub: `${stackCount(x.id)} item${stackCount(x.id) === 1 ? '' : 's'}` }))],
+        // A job's stack is its Files, named after it (JOBCHAT.md): the job is linked instead, so it isn't listed twice.
+        ['Stacks', S.workspace.stacks.filter((x) => !x.recordId && hit(x.name)).map((x) => ({ type: 'stack', id: x.id, label: x.name, icon: I.stack, sub: `${stackCount(x.id)} item${stackCount(x.id) === 1 ? '' : 's'}` }))],
         ['Files & images', S.items.filter((x) => (x.type === 'file' || x.type === 'folder') && hit(x.name)).sort((a, b) => b.createdAt - a.createdAt)
           .map((x) => ({ type: 'file', id: x.id, label: x.name, it: x, sub: fmtSize(x.size) }))],
         ['Campaigns', S.campaigns.filter((c) => hit(c.name)).map((c) => ({ type: 'campaign', id: c.id, label: c.name, icon: I.target, sub: Math.round(campProgress(c) * 100) + '%' }))],
