@@ -6142,7 +6142,11 @@ function applyBill(b, body) {
     if (!Number.isFinite(n) || n < 0 || n > 1e11) throw badRequest('Enter the amount, like 142.50');
     b.amount = n;
   }
-  if (body.repeat !== undefined) b.repeat = BILL_REPEATS.includes(body.repeat) ? body.repeat : 'monthly';
+  // How often it repeats, as sent (the team audit, 2026-11-28: a supplier bill sent without one was saved as monthly).
+  if (body.repeat !== undefined) {
+    if (!BILL_REPEATS.includes(body.repeat)) throw badRequest('Pick how often it repeats: once, weekly, monthly, quarterly or yearly.');
+    b.repeat = body.repeat;
+  }
   if (body.due !== undefined) {
     b.due = validDay(body.due);
     if (!b.due) throw badRequest('Pick the date it’s due.');
@@ -8347,7 +8351,7 @@ function skCard(v, ws) {
   }
   if (type === 'bill') {
     const amount = Math.round(Number(String(v.amount ?? '').replace(/[$,\s]/g, '')) * 100) / 100;
-    Object.assign(c, { name: t(v.name, 80), amount: Number.isFinite(amount) && amount > 0 ? Math.min(1e9, amount) : null, repeat: BILL_REPEATS.includes(v.repeat) ? v.repeat : 'monthly', due: skDay(v.due), category: t(v.category, 40) || 'Bills', scope: v.scope === 'business' ? 'business' : 'personal', autopay: !!v.autopay });
+    Object.assign(c, { name: t(v.name, 80), amount: Number.isFinite(amount) && amount > 0 ? Math.min(1e9, amount) : null, repeat: BILL_REPEATS.includes(v.repeat) ? v.repeat : 'once', due: skDay(v.due), category: t(v.category, 40) || 'Bills', scope: v.scope === 'business' ? 'business' : 'personal', autopay: !!v.autopay });
   }
   if (type === 'block') Object.assign(c, { text: t(v.text, 200), date: skDay(v.date), start: skMin(v.start, 1439), end: skMin(v.end, 1440), repeat: REPEATS.includes(v.repeat) ? v.repeat : null });
   if (type === 'task') Object.assign(c, { text: t(v.text, 300), due: skDay(v.due), goal: t(v.goal, 200), ...whoOfCard(ws, v) });
@@ -9727,7 +9731,7 @@ async function api(req, res, url) {
   if (a === 'bills') {
     if (m === 'POST' && !b) {
       const body = await readJson(req, 20_000);
-      const x = applyBill({ id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), name: '', amount: 0, repeat: 'monthly', scope: 'personal', autopay: false, note: '', paid: [], done: false, tz: validTz() }, { repeat: 'monthly', ...body });
+      const x = applyBill({ id: rid(), wsId: ws.id, memberId: auth.memberId, by: auth.member, createdAt: Date.now(), name: '', amount: 0, repeat: 'once', scope: 'personal', autopay: false, note: '', paid: [], done: false, tz: validTz() }, body);
       if (!x.due) return send(res, 400, { error: 'Pick the date it’s due.' });
       if (x.scope === 'business' && auth.role !== 'owner') x.scope = 'personal';
       db.bills[x.id] = x;
@@ -11607,10 +11611,12 @@ async function api(req, res, url) {
       if (target.id === auth.memberId) return send(res, 400, { error: 'You can’t do that to yourself.' });
       // An admin looks after members: not other admins or owners, and can't make anyone an owner.
       if (auth.role !== 'owner' && target.role !== 'member') return send(res, 403, { error: 'Only team owners can change other admins and owners.' });
+      if (m === 'GET' && c === 'removal') return send(res, 200, removalOf(ws, target));
       if (m === 'DELETE') {
+        const what = removalOf(ws, target);
         await removeMember(ws, target, { removed: true });
         PJ.reseeAll(ws.id);
-        return send(res, 200, publicWorkspace(ws, auth.memberId));
+        return send(res, 200, { ...publicWorkspace(ws, auth.memberId), handed: { visits: what.visitsAlone, to: what.heir } });
       } else if (c === 'reset' && m === 'POST') {
         // Someone with an account resets it from their email; without email working, they're unlinked
         // here and choose a new password with the invite code, like before accounts.
@@ -13734,6 +13740,17 @@ async function eraseTeam(ws) {
 // ---------- someone leaves a team: they leave, an owner removes them, or they delete their account ----------
 // Their private things go. What they shared stays with the team, under their name. What only they could
 // see but the business needs (signing requests, meeting notes, map pins, campaigns they ran) passes to an owner.
+// What removing someone does to their job visits, for whoever removes them to see first (the team audit, 2026-11-28):
+// a visit only they were going to goes to an owner (`heir`); on a shared one, their place is dropped.
+function removalOf(ws, m) {
+  const heir = ws.members.find((x) => x.role === 'owner' && x.id !== m.id);
+  let alone = 0, shared = 0;
+  for (const e of Object.values(db.entries)) {
+    if (e.wsId !== ws.id || e.memberId !== m.id || !e.visitId) continue;
+    if (Object.values(db.entries).some((o) => o.visitId === e.visitId && o.id !== e.id && o.memberId !== m.id)) shared++; else alone++;
+  }
+  return { name: m.name, heir: heir?.name || null, visitsAlone: heir ? alone : 0, visitsShared: shared + (heir ? 0 : alone) };
+}
 async function removeMember(ws, m, { removed = false } = {}) {
   const id = m.id;
   const wsId = ws.id;

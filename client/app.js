@@ -18606,8 +18606,19 @@
   // What gets done on site, ticked off as it happens.
   function prChecklist(p, t, r, f) {
     // A job made before the checklist was added starts with its steps too (saved once something is ticked or changed).
-    const v = JSON.parse(JSON.stringify(r.values[f.id] || { items: (f.list || []).map((text, i) => ({ id: `s${i}`, text, done: false })) }));
-    const sv = prSaver(r, f);
+    const fresh = () => JSON.parse(JSON.stringify(r.values[f.id] || { items: (f.list || []).map((text, i) => ({ id: `s${i}`, text, done: false })) }));
+    const v = fresh();
+    // One step at a time, and the server says who and when (the team audit, 2026-11-28). On a job, changing the steps
+    // is for whoever runs it; someone helping on a visit ticks only (the server holds the same rule).
+    const isJob = t.key === 'jobs' || String(t.key || '').startsWith('trade_');
+    const me = S.me?.memberId;
+    const runs = !isJob || amAdmin() || r.memberId === me || t.fields.some((x) => x.type === 'person' && r.values[x.id] === me);
+    const step = async (body) => {
+      const y = await prCall('POST', `/records/${r.id}/checklist/${f.id}`, body);
+      if (y) { prUpsertRecord(y); r.values = y.values; }
+      v.items = fresh().items;
+      draw();
+    };
     const box = h('div', { class: 'pj-cl' });
     const bar = h('i');
     const count = h('small', { class: 'pj-cl-n' });
@@ -18617,13 +18628,13 @@
       count.textContent = v.items.length ? `${done} of ${v.items.length}` : '';
       box.replaceChildren(...v.items.map((x) => {
         const cb = h('input', { type: 'checkbox', checked: x.done, 'aria-label': x.text });
-        cb.addEventListener('change', () => { x.done = cb.checked; if (x.done) { x.by = S.me?.member; x.at = Date.now(); } else { delete x.by; delete x.at; } draw(); sv.now(v); });
+        cb.addEventListener('change', () => step({ op: cb.checked ? 'tick' : 'untick', itemId: x.id }));
         return h('div', { class: 'pj-cl-row' + (x.done ? ' done' : '') }, h('label', { class: 'pick' }, cb, h('span', {}, x.text)), x.done && x.by ? h('small', {}, `${x.by} · ${ago(x.at)}`) : null,
-          h('button', { class: 'pj-it-x', 'aria-label': 'Remove', onclick: () => { v.items = v.items.filter((y) => y !== x); draw(); sv.now(v); } }, '×'));
+          runs ? h('button', { class: 'pj-it-x', 'aria-label': 'Remove', onclick: () => step({ op: 'remove', itemId: x.id }) }, '×') : null);
       }));
     };
-    const add = h('input', { class: 'pj-it-in', placeholder: '+ Add a step' });
-    add.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || !add.value.trim()) return; v.items.push({ id: Math.random().toString(36).slice(2, 8), text: add.value.trim(), done: false }); add.value = ''; draw(); sv.now(v); });
+    const add = runs ? h('input', { class: 'pj-it-in', placeholder: '+ Add a step' }) : null;
+    add?.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || !add.value.trim()) return; const text = add.value.trim(); add.value = ''; step({ op: 'add', text }); });
     draw();
     return prBlock(f, count, h('div', { class: 'pj-cl-bar' }, bar), box, add);
   }
@@ -27560,6 +27571,22 @@
       // People
       const onlineIds = new Set(S.online.map((d) => d.memberId));
       const peopleCall = (method, path, body) => api(method, path, body).then((w) => { S.workspace = w; renderSettings(); }).catch((e) => toast(e.message));
+      // Removing someone says first what happens to their visits, and after where they went (the team audit, 2026-11-28).
+      const removeSheet = async (mb) => {
+        const x = await api('GET', `/members/${mb.id}/removal`).catch((e) => { toast(e.message); return null; });
+        if (!x) return;
+        const lines = [
+          `${mb.name} is signed out of the team and can’t open it again. If they join again, they start as a new person.`,
+          x.visitsAlone ? `${x.visitsAlone} visit${x.visitsAlone === 1 ? '' : 's'} only ${mb.name} was going to go${x.visitsAlone === 1 ? 'es' : ''} to ${x.heir}, to give to someone else.` : null,
+          x.visitsShared ? `On ${x.visitsShared} visit${x.visitsShared === 1 ? '' : 's'} with others, ${mb.name}’s place is dropped.` : null,
+        ].filter(Boolean);
+        sheet(`Remove ${mb.name}?`, lines.map((l) => h('p', {}, l)), async () => {
+          const w = await api('DELETE', '/members/' + mb.id);
+          S.workspace = w;
+          renderSettings();
+          toast(w.handed?.visits ? `${mb.name} is removed. ${w.handed.visits} visit${w.handed.visits === 1 ? ' is' : 's are'} ${w.handed.to === S.me?.member ? 'yours' : w.handed.to + '’s'} now.` : `${mb.name} is removed.`);
+        }, 'Remove');
+      };
       const people = h('section', {}, h('h3', {}, `People · ${ws.members.length}`));
       const sorted = [...ws.members].sort((a, b) => (b.id === me?.id) - (a.id === me?.id) || a.name.localeCompare(b.name));
       for (const mb of sorted) {
@@ -27579,7 +27606,7 @@
               // Only shown now: the code that lets this one person set a new password.
               sheet(`${mb.name}’s reset code`, [h('p', {}, `${mb.name} is signed out. Give them this code (it works once, for 7 days). They choose Join team, type their name, the invite code and this reset code, and pick a new password.`), h('p', { class: 'reset-code' }, h('code', {}, w.claimCode), ' ', h('button', { class: 'btn small', onclick: () => { copyText(w.claimCode); toast('Copied'); } }, 'Copy'))], null);
             }).catch((e) => toast(e.message)) },
-            { label: 'Remove from team', danger: true, run: () => peopleCall('DELETE', '/members/' + mb.id) },
+            { label: 'Remove from team', danger: true, run: () => removeSheet(mb) },
           ].filter(Boolean)) }));
         }
         people.append(row);
