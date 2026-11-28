@@ -112,9 +112,10 @@ ok(await A.until(`[...document.querySelectorAll('#docview .dv-link')].some((x) =
 await A.tap(`document.querySelector('#docview .dk-ref-campaign')`);
 ok(await A.until(`document.querySelector('#docview').classList.contains('hidden')`), 'clicking the mention leaves the doc for the campaign');
 // (2026-11-20: a campaign's task rows are lighter; the task, opened, says which doc it came from.)
-ok(await A.until(`[...document.querySelectorAll('.task-row')].some((r) => r.textContent.includes('Send fleet pricing PDF today'))`, 4000), 'the task is in the campaign');
+// (2026-11-27: a campaign opens to be read; its tasks are .cc-rrow there, and a name opens the task.)
+ok(await A.until(`[...document.querySelectorAll('#camps .task-row, #camps .cc-rrow')].some((r) => r.textContent.includes('Send fleet pricing PDF today'))`, 4000), 'the task is in the campaign');
 // (Folders & Docs is still over the page here, so a real tap would land on it; open the task directly.)
-await A.ev(`[...document.querySelectorAll('#camps .task-row .p-text')].find((r) => r.textContent.includes('Send fleet pricing PDF today')).click(); true`);
+await A.ev(`(() => { const r = [...document.querySelectorAll('#camps .task-row, #camps .cc-rrow')].find((x) => x.textContent.includes('Send fleet pricing PDF today')); (r.querySelector('.cc-rrow-name') || r.querySelector('.p-text')).click(); return true; })()`);
 ok(await A.until(`document.querySelector('#sheet .win-doc')?.textContent.includes('Fleet notes')`, 4000), 'opened, it links back to the doc it came from');
 ok(!A.errors.length, 'no page errors' + (A.errors.length ? ': ' + A.errors.join(' / ') : ''));
 A.close(); chrome.kill();

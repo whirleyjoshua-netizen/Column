@@ -8403,6 +8403,8 @@
         t.startOn ? row('Starts', dueLabel(t.startOn)) : null,
         row('Due', t.due ? h('span', { class: isOverdue(t) ? 'late' : '' }, dueLabel(t.due)) : h('small', { class: 'muted' }, 'No date')),
         t.priority ? row('Priority', h('span', { class: 'cc-prio p' + t.priority }, PRIO[t.priority])) : null,
+        // The doc it was made from, as the full window shows it (e2e2).
+        t.docId && S.items.some((x) => x.id === t.docId) ? h('div', { class: 'td-row win-doc' }, h('span', { class: 'td-l' }, 'From the doc'), h('span', { class: 'td-v' }, docTitle(S.items.find((x) => x.id === t.docId)), ' ', h('button', { class: 'btn small', onclick: () => { closeSheet(); openDoc(S.items.find((x) => x.id === t.docId)); } }, 'Open'))) : null,
         t.wo ? row('Work order', t.wo.no) : null),
       t.description ? sec(t.wo ? 'Instructions' : 'Description', h('div', { class: 'tr-desc', html: linkify(t.description) })) : null,
       checklist ? sec(`${t.wo ? 'Steps' : 'Checklist'} · ${cl.filter((x) => x.done).length}/${cl.length}`, checklist) : null,
