@@ -1924,7 +1924,7 @@
       { cmd: 'finance', also: ['money'], hint: 'Open Finance', on: toolOn('bills'), off: off('Finance'), run: () => openTool('bills') },
       { cmd: 'contact', hint: 'Add a contact', arg: 'name', on: toolOn('contacts') && memberMay('contacts'), off: toolOn('contacts') ? 'Your team’s owners and admins have Contacts off for members.' : off('Contacts'), run: (t) => { contactSheet(null); fillFirst(t); } },
       { cmd: 'contacts', hint: 'Open Contacts', on: toolOn('contacts') && memberMay('contacts'), off: toolOn('contacts') ? 'Your team’s owners and admins have Contacts off for members.' : off('Contacts'), run: () => openTool('contacts') },
-      { cmd: 'campaign', hint: 'Start a campaign', arg: 'name', run: (t) => { campaignSheet(null); fillFirst(t); } },
+      { cmd: 'campaign', hint: 'Start a campaign', arg: 'name', run: (t) => campaignSheet(null, null, null, { type: 'campaign', name: t || '' }) }, // /campaign is a Campaign: no Checklist-or-Campaign question first
       { cmd: 'job', also: ['jobs', 'projects', 'boards'], hint: 'Open Boards', on: toolOn('projects'), off: off('Boards'), run: () => showProjects() },
       { cmd: 'meeting', also: ['record'], hint: 'Record a meeting, get the notes', arg: 'what it’s about', on: toolOn('meetings'), off: off('Meeting notes'), run: (t) => askRecord(t) },
       { cmd: 'sidekick', also: ['ask'], hint: 'Plan it with Sidekick', on: toolOn('sidekick'), off: off('Sidekick'), run: () => { SK.open = null; openTool('sidekick'); } },
