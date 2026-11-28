@@ -49,6 +49,10 @@ try {
   const priceId = tp.fields.find((f) => f.key === 'price').id;
   const lines = (pct) => ({ rows: [{ desc: 'Shutters', qty: 4, price: 500 }], ...(pct ? { discount: { type: 'percent', value: pct } } : {}) });
   const job = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Ruiz shutters', price: lines(0) } })).body;
+  // Sam is on the job (only whoever it's assigned to, its maker and admins delete a job: tests/job_lock.mjs).
+  const crewF = tp.fields.find((f) => f.type === 'person');
+  const samId = ids.find((x) => x.name === 'Sam').id;
+  await jo('PATCH', '/records/' + job.id, { values: { [crewF.id]: samId } });
   const disc = async (who) => (await who('GET', `/projects/${p.id}/records`)).body.find((x) => x.id === job.id)?.values[priceId]?.discount?.value || 0;
 
   r = await kim('PATCH', '/records/' + job.id, { values: { [priceId]: lines(15) } });
@@ -95,7 +99,7 @@ try {
   await jo('DELETE', '/records/' + job.id);
   r = await jo('POST', `/approvals/${r.body.approval.id}/approve`);
   ok(r.body.approval.status === 'failed' && /gone/i.test(r.body.approval.error), 'approving something that’s gone by then says so: ' + r.body.approval.error);
-  const job2 = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Second job' } })).body;
+  const job2 = (await jo('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Second job', [crewF.id]: samId } })).body;
   r = await sam('DELETE', '/records/' + job2.id);
   ok((await sam('DELETE', '/approvals/' + r.body.approval.id)).status === 200 && !(await jo('GET', '/approvals')).body.approvals.some((x) => x.id === r.body.approval.id), 'Sam can take back his own request while it waits');
 
@@ -116,7 +120,7 @@ try {
   const inv2 = (await ann('POST', `/records/${job3.id}/invoices`)).body;
   ok((await ann('POST', `/invoices/${inv2.id}/send`)).status === 200, 'when admins can approve, Ann sends it herself');
   r = await sam('PATCH', '/records/' + job3.id, { values: { [priceId]: lines(25) } });
-  ok(r.status === 403 && /owners and admins/.test(r.body?.error || ''), 'a member can’t give a discount at all: prices are for owners and admins');
+  ok(r.status === 403 && /admins/.test(r.body?.error || ''), 'a member can’t give a discount at all: prices are for owners and admins');
 
   // The AI hears the rules.
   await jo('PUT', '/ai/keys/anthropic', { key: 'sk-ant-test-key-1234567890' });

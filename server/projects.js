@@ -389,6 +389,18 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     const who = jobCurrentWho(rec);
     return !!who && ((who.type === 'member' && who.id === memberId) || (who.type === 'role' && (me.roleIds || []).includes(who.id)));
   }
+  // Who changes or deletes a job (column-fe's crew test, 2026-11-28: an apprentice deleted a $7,400 job): owners and
+  // admins, whoever made it, and whoever its person fields name (Assigned to, Crew lead). Everyone else who sees it
+  // works it (notes, its chat, their Job Flow step). Lists that aren't jobs are unchanged. `auth` is a person or a key
+  // acting as its member: the role is read from the team, not from the caller.
+  const JOB_LOCKED = 'Only whoever the job is assigned to, whoever made it, and team admins change or delete it.';
+  function mayEditJob(rec, auth, p = db.projects[rec?.projectId], t = p && typeOf(p, rec.typeId)) {
+    if (!rec || !isJobT(t)) return true;
+    const me = memberOf(rec.wsId, auth?.memberId);
+    if (!me) return false;
+    if (['owner', 'admin'].includes(me.role) || rec.memberId === me.id) return true;
+    return t.fields.some((f) => f.type === 'person' && rec.values[f.id] === me.id);
+  }
   // Who sees a job now (members only; owners and admins always do), and the change since last time: a member who lost
   // it gets record:gone, one who gained it gets the record (as new). Called after anything that can change it.
   const jobSeers = new Map(); // recordId → Set of member ids that saw it when last worked out
@@ -1699,6 +1711,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
               rec = key != null ? index.get(String(key).toLowerCase()) : null;
             }
             if (rec) {
+              if (!mayEditJob(rec, auth, p, t)) throw bad(`${recName(p, rec)}: ${JOB_LOCKED}`);
               const before = { ...rec.values };
               applyValues(ws, p, t, rec, row, { addChoices: true });
               if (quoteLocked(t, rec, before)) rec.values = before; // an accepted quote's lines stay as accepted
@@ -1845,6 +1858,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
       }
       if (m === 'PATCH' && !c) {
         const body = await readJson(req, 200_000);
+        if (!mayEditJob(rec, auth, p, t)) return send(res, 403, { error: JOB_LOCKED });
         if (pricedWrite(ws.id, auth.memberId, p, t, body.values, rec)) return send(res, 403, PRICES_403);
         const held = holdDiscount(ws, auth, p, t, rec, body.values, req, body);
         if (held) return send(res, held.status, held.body);
@@ -1865,6 +1879,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
         return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
       }
       if (m === 'DELETE' && !c) {
+        if (!mayEditJob(rec, auth, p, t)) return send(res, 403, { error: JOB_LOCKED });
         const held = hold?.(ws, auth, 'deleteRecord', { summary: `Delete ${recName(p, rec)}`, target: { projectId: p.id, recordId: rec.id }, req: { method: 'DELETE', path: req.url, body: null } });
         if (held) return send(res, held.status, held.body);
         recordGone(rec, auth.member);
@@ -2360,6 +2375,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
         if (pricedWrite(ws.id, auth.memberId, p, t, fields, rec || null)) return send(res, 403, PRICES_403);
         { const held = holdDiscount(ws, auth, p, t, rec || null, fields, null, null); if (held) return send(res, held.status, held.body); }
         if (rec) {
+          if (!mayEditJob(rec, auth, p, t)) return send(res, 403, { error: JOB_LOCKED });
           const before = { ...rec.values };
           applyValues(ws, p, t, rec, fields, { addChoices: true });
           if (quoteLocked(t, rec, before)) { rec.values = before; throw bad('The customer accepted this quote, so its lines can’t change.'); }
@@ -2395,6 +2411,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     if (m === 'PATCH') {
       write();
       const body = await readJson(req, 200_000);
+      if (!mayEditJob(rec, auth, p, t)) return send(res, 403, { error: JOB_LOCKED });
       if (pricedWrite(ws.id, auth.memberId, p, t, inFields(t, body.fields), rec)) return send(res, 403, PRICES_403);
       { const held = holdDiscount(ws, auth, p, t, rec, inFields(t, body.fields), null, null); if (held) return send(res, held.status, held.body); }
       const before = { ...rec.values };
@@ -2409,6 +2426,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     }
     if (m === 'DELETE') {
       write();
+      if (!mayEditJob(rec, auth, p, t)) return send(res, 403, { error: JOB_LOCKED });
       const held = hold?.(ws, auth, 'deleteRecord', { summary: `Delete ${recName(p, rec)}`, target: { projectId: p.id, recordId: rec.id } });
       if (held) return send(res, held.status, held.body);
       recordGone(rec, auth.member);

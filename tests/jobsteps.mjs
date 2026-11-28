@@ -36,6 +36,8 @@ try {
   const statusF = tp.fields.find((f) => f.key === 'status');
   const [s0, s1, s2, s3] = statusF.choices;
   const job = (await rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Bill Nye · 6 windows', [statusF.id]: s0.id } })).body;
+  // Sam works this job: he's its crew (only whoever a job is assigned to, its maker and admins move it: tests/job_lock.mjs).
+  { const st0 = (await rico('GET', '/state')).body; const sid = st0.workspace.members.find((m) => m.name.startsWith('Sam')).id; await rico('PATCH', '/records/' + job.id, { values: { [tp.fields.find((f) => f.type === 'person').id]: sid } }); }
   const stageOf = async (id = job.id) => (await rico('GET', `/projects/${p.id}/records`)).body.find((x) => x.id === id)?.values[statusF.id];
   const move = (who, to, extra = {}) => who('PATCH', `/records/${job.id}`, { values: { [statusF.id]: to.id }, ...extra });
   ok((await stageOf()) === s0.id, `(setup) a job at ${s0.label}; stages ${s0.label} → ${s1.label} → ${s2.label}`);

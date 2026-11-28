@@ -50,6 +50,8 @@ try {
   const statusF = tp.fields.find((f) => f.key === 'status');
   const [s0, s1, s2] = statusF.choices;
   const job = (await rico('POST', `/projects/${p.id}/records`, { typeId: tp.id, values: { job: 'Bill Nye', [statusF.id]: s0.id } })).body;
+  // Sam works this job: he's its crew (only whoever a job is assigned to, its maker and admins move it: tests/job_lock.mjs).
+  { const st0 = (await rico('GET', '/state')).body; const sid = st0.workspace.members.find((m) => m.name.startsWith('Sam')).id; await rico('PATCH', '/records/' + job.id, { values: { [tp.fields.find((f) => f.type === 'person').id]: sid } }); }
   const auto = async (who, name, trigger, actions) => { const x = await who('POST', '/automations', { name, trigger, actions }); ok(x.status === 200, `(setup) the automation “${name}” ${x.body?.error || ''}`); return x.body; };
   const post = (text) => ({ kind: 'post', text, channelId: 'general' });
 

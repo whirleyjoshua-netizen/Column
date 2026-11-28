@@ -135,7 +135,9 @@ try {
     { kind: 'post', text: 'Done with {record}', channelId: fJobs }] });
   ok(r.status === 200 && r.body.actions[0].kind === 'record' && r.body.actions[1].kind === 'create', 'an automation can change the record and add one');
   const dana = (await rico('POST', '/contacts', { name: 'Dana Ruiz', address: '12 Desert Rd', city: 'Henderson' })).body;
-  const job = (await rico('POST', `/projects/${p.id}/records`, { typeId: hvac.id, values: { job: 'AC not cooling', customer: dana.id } })).body;
+  // Sam is on it (only whoever a job is assigned to, its maker and admins move it: tests/job_lock.mjs).
+  const samOn = (await rico('GET', '/state')).body.workspace.members.find((m) => m.name === 'Sam Lee').id;
+  const job = (await rico('POST', `/projects/${p.id}/records`, { typeId: hvac.id, values: { job: 'AC not cooling', customer: dana.id, [fk(hvac, 'crew').id]: samOn } })).body;
   await sam('PATCH', `/records/${job.id}`, { values: { [st.id]: st.choices[2].id } });
   ok(await until(async () => (await posts(fJobs)).includes('Done with AC not cooling')), '(it ran)');
   got = await recOf(p.id, job.id);

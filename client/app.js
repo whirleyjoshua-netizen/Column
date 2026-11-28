@@ -17764,7 +17764,7 @@
         try {
           const c = await api('POST', '/campaigns', { name: recName(t, r).slice(0, 80) || 'Job', recordId: r.id });
           if (!campById(c.id)) S.campaigns.push(c);
-          openCampaign(c.id);
+          openCampaign(c.id, { edit: true }); // just made: straight into planning it
         } catch (e) { toast(e.message); }
       } },
     ].filter(Boolean));
