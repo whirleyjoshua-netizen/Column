@@ -14197,6 +14197,7 @@ migrateDay();
 PJ.moveLicensesOut();
 // Chat and stacks together (docs/jobflows/JOBCHAT.md §7): each team once; the job-chat safety net starts from now.
 { let changed = false; for (const ws of Object.values(db.workspaces)) { if (chatStacksMigrate(ws)) changed = true; if (!ws.chatFolders.some((f) => f.jobs)) { chatFolderFor(ws, 'jobs', 'Jobs'); changed = true; } /* the Jobs chat folder is always there (JOBCHAT.md §13) */ if (ws.jobChatsSince === undefined) { ws.jobChatsSince = Date.now(); changed = true; } } if (changed) save(); }
+PJ.kindStepsAll(); // trade lists from before get steps for each kind of job (tests/kind_steps.mjs)
 jcMoveAll();
 PJ.reseeAll(); // who sees each job now, so the first change after a restart tells only those it changes for
 dropCutImports();

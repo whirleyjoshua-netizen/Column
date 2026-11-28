@@ -201,6 +201,66 @@ export const TRADES = {
     checklist: ['Exterior', 'Roof', 'Attic', 'Plumbing', 'Electrical', 'HVAC', 'Interior', 'Write the report'] },
 };
 
+// Steps for the kinds of job that go differently from the trade's own list (column-fe's crew test, 2026-11-28: a
+// gutter job got the roofing tear-off). By trade, then by the label of its "Kind of job" choice; a kind left out
+// starts with the trade's checklist.
+const ESTIMATE = ['Look over the job with the customer', 'Measure', 'Photos', 'Work out the options and prices', 'Send the quote'];
+export const KIND_STEPS = {
+  hvac: {
+    Maintenance: ['Check the thermostat', 'Replace the filter', 'Clean the coils', 'Check refrigerant and pressures', 'Check electrical connections and capacitor', 'Clear the drain line', 'Test heating and cooling', 'Record readings', 'Set the next service date'],
+    Install: ['Confirm sizing (load calculation)', 'Permit', 'Remove the old equipment', 'Set the new equipment', 'Line set, wiring and drain', 'Vacuum and charge', 'Start up and test', 'Record readings and serial numbers', 'Register the warranty', 'Walk the customer through the thermostat'],
+    Estimate: ESTIMATE,
+  },
+  plumbing: {
+    Clog: ['Find which drain', 'Protect floors', 'Snake or jet the line', 'Camera the line if it keeps coming back', 'Run water to test', 'Clean up'],
+    'Water heater': ['Shut off water and gas or power', 'Drain the old tank', 'Remove the old heater', 'Set the new heater', 'Connect water and gas or power', 'Check for leaks', 'Test the relief valve', 'Fill and turn on', 'Haul away the old one', 'Register the warranty'],
+    Estimate: ESTIMATE,
+  },
+  electrical: {
+    'Panel upgrade': ['Permit', 'Book the utility disconnect', 'Turn off and lock out', 'Swap the panel', 'Move and label the circuits', 'Ground and bond', 'Inspection', 'Utility reconnect', 'Test every circuit', 'Photos of the panel'],
+    'EV charger': ['Load calculation', 'Permit', 'Run the circuit', 'Mount the charger', 'Test charge', 'Inspection'],
+    Inspection: ['Check the panel', 'Test outlets and GFCIs', 'Check smoke and CO detectors', 'Note what needs fixing', 'Write the report'],
+  },
+  garage: {
+    'Tune-up': ['Inspect springs, cables and rollers', 'Lubricate', 'Tighten the hardware', 'Balance the door', 'Test the safety reverse', 'Check the opener'],
+    'New door': ['Measure the opening', 'Order the door', 'Remove the old door', 'Install tracks and springs', 'Hang the door', 'Connect the opener', 'Test the safety reverse', 'Haul away the old door'],
+    'New opener': ['Remove the old opener', 'Mount the opener', 'Wire it and set the sensors', 'Program remotes and keypad', 'Test the safety reverse', 'Show the customer the app'],
+    Springs: ['Measure the old springs', 'Unwind safely', 'Replace springs and cables', 'Balance the door', 'Test the safety reverse'],
+  },
+  generator: {
+    Install: ['Site survey', 'Permit', 'Set the pad', 'Set the generator', 'Gas line', 'Transfer switch', 'Inspection', 'Start up and test', 'Show the customer how it works'],
+  },
+  solar: {
+    Cleaning: ['Check the roof is safe to work', 'Output before', 'Rinse the panels', 'Clean with a soft brush', 'Check for damage', 'Output after'],
+  },
+  roofing: {
+    Repair: ['Find the leak', 'Photos before', 'Repair', 'Seal and flash', 'Photos after', 'Clean up'],
+    Siding: ['Measure the walls', 'Order', 'Remove the old siding', 'House wrap', 'Install the siding', 'Trim and corners', 'Caulk', 'Clean up and magnet sweep', 'Final photos'],
+    Gutters: ['Measure runs and downspouts', 'Confirm color and size', 'Remove the old gutters', 'Hang the gutters with the right pitch', 'Downspouts and elbows', 'Seal the seams', 'Run water to test', 'Clean up', 'Final photos'],
+    Inspection: ['Walk the roof', 'Photos of every slope', 'Check flashing, vents and gutters', 'Note the damage', 'Write the report'],
+  },
+  fencing: {
+    Deck: ['Call utility locate', 'Permit', 'Footings', 'Framing', 'Decking', 'Railings and stairs', 'Inspection', 'Clean up'],
+    Repair: ['Photos before', 'Replace the broken parts', 'Photos after', 'Clean up'],
+  },
+  concrete: {
+    Pavers: ['Call utility locate', 'Mark the layout', 'Excavate', 'Base gravel and compact', 'Sand bed', 'Lay the pavers', 'Cut the edges', 'Edge restraint', 'Polymeric sand', 'Compact and clean up'],
+    Repair: ['Photos before', 'Cut out or grind', 'Patch or replace', 'Finish', 'Photos after'],
+  },
+  trees: {
+    'Stump grinding': ['Call utility locate', 'Grind the stumps', 'Fill the holes', 'Rake and clean up'],
+    'Storm cleanup': ['Make the area safe', 'Photos for insurance', 'Cut and clear', 'Chip and haul', 'Rake and clean up'],
+  },
+  irrigation: {
+    'Start-up': ['Turn on the water', 'Run every zone', 'Fix heads and leaks', 'Adjust coverage', 'Set the schedule'],
+    Winterize: ['Shut off the water', 'Blow out every zone', 'Drain the backflow', 'Turn the controller off', 'Tag the system'],
+  },
+  junk: {
+    'Junk removal': ['Walk through with the customer', 'Confirm the price', 'Load', 'Sweep up', 'Dump receipt'],
+    Packing: ['Boxes and supplies', 'Pack room by room', 'Label every box', 'Inventory list'],
+  },
+};
+
 // A trade as a list for a Jobs project: the core fields, the trade's, then checklist, photos and sign-off.
 export function tradeType(key) {
   const tr = TRADES[key];
@@ -224,7 +284,7 @@ export function tradeType(key) {
       ...(FOR_TRADE[key] || []),
       { key: 'price', name: 'Price', type: 'items' },
       ...tr.fields.map(spec),
-      { key: 'checklist', name: 'Checklist', type: 'checklist', list: tr.checklist },
+      { key: 'checklist', name: 'Checklist', type: 'checklist', list: tr.checklist, ...(KIND_STEPS[key] ? { kinds: { field: 'kind', lists: KIND_STEPS[key] } } : {}) },
       { key: 'before', name: 'Before photos', type: 'files' },
       { key: 'after', name: 'After photos', type: 'files' },
       { key: 'signoff', name: 'Customer sign-off', type: 'signature' },

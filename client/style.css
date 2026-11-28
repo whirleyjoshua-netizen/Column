@@ -5341,3 +5341,5 @@ body:not(.wide) .kapp-grid { grid-template-columns: 1fr; }
 .pj-cl-more { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
 .pj-cl-more:hover, .pj-cl-more:focus-visible { background: var(--soft); color: var(--text); }
 .pj-cl-edit { flex: 1; min-width: 0; }
+.pj-steps-kinds { display: grid; gap: 8px; max-height: 45vh; overflow: auto; }
+.pj-steps-kinds textarea, .pj-steps-all { width: 100%; }

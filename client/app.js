@@ -15879,6 +15879,8 @@
       if ($('#projects').classList.contains('hidden')) return;
       if ($('#projects')?.contains(document.activeElement) && document.activeElement.matches('input, textarea')) return prSoon();
       if (document.body.classList.contains('is-dragging')) return prSoon(); // not under a card being dragged
+      // Nor under an open menu: its pick acts on the card it opened from (a step's ⋯ → Reword lost its box to a redraw).
+      if (!$('#menu')?.classList.contains('hidden')) return prSoon();
       renderProjects();
     }, 120);
   }
@@ -16691,6 +16693,7 @@
       v.sort ? { label: 'Newest first (no sort)', run: () => prSchema(p, { op: 'updateView', typeId: t.id, viewId: v.id, sort: null }) } : null,
       { label: 'Rename', run: () => { const i = h('input', { value: f.name }); sheet('Rename field', [h('label', {}, 'Name', i), h('p', { class: 'day-hint' }, `Apps connected to Kloomie still find it as “${f.key}”.`)], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, name: i.value })); } },
       f.choices ? { label: 'Edit options…', run: () => prEditChoices(p, t, f) } : null,
+      f.type === 'checklist' ? { label: 'Starting steps…', run: () => prStepsSheet(p, t, f) } : null,
       CALC_T.has(f.type) ? { label: f.type === 'formula' ? 'Edit the formula…' : 'Change what it adds up…', run: () => prCalcSheet(p, t, f) } : null,
       f.type === 'signature' ? { label: 'Sign-off form…', run: async () => { const forms = await signForms(true); openMenu(e.target, [{ head: `The form every ${(t.singular || 'record').toLowerCase()} signs` }, ...forms.map((x) => ({ label: x.name, on: f.form === x.id, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id }) })), { label: 'No form: the plain sign-off', on: !f.form, run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: null }) }, { head: '' }, { label: '✏️ Make a form…', run: () => signFormSheet(p, t, null, (x) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id })) }, { label: '⬆️ Upload a PDF form…', run: () => signFormUpload((x) => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, form: x.id })) }]); } } : null,
       f.type === 'secret' && (p.memberId === S.me?.memberId || amAdmin()) ? { label: 'Who can see it…', run: () => openMenu(e.target, [{ head: `Who can see the ${f.name.toLowerCase()}` }, { label: `Everyone who can open ${p.name}`, on: f.reveal !== 'managers', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, reveal: 'team' }) }, { label: 'Only whoever made the project and team admins', on: f.reveal === 'managers', run: () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, reveal: 'managers' }) }]) } : null,
@@ -16698,6 +16701,36 @@
       t.fields.some((x) => x.hidden) ? { label: 'Show hidden fields', run: async () => { for (const x of t.fields.filter((y) => y.hidden)) await prCall('POST', `/projects/${p.id}/schema`, { op: 'updateField', typeId: t.id, fieldId: x.id, hidden: false }).then((y) => y && prUpsertProject(y.project)); renderProjects(); } } : null,
       f.id !== t.primary ? { label: 'Delete field', danger: true, run: () => prSchema(p, { op: 'removeField', typeId: t.id, fieldId: f.id }) } : null,
     ].filter(Boolean));
+  }
+  // The steps a new record's checklist starts with, and its own for each kind of job (a gutter job isn't a
+  // re-roof): one step a line; a kind left empty starts with the steps above (tests/kind_steps.mjs).
+  function prStepsSheet(p, t, f) {
+    const one = (t.singular || 'record').toLowerCase();
+    const lines = (l) => (l || []).join('\n');
+    const split = (v) => v.split('\n').map((x) => x.trim()).filter(Boolean);
+    const all = h('textarea', { class: 'pj-steps-all', rows: 6, placeholder: 'One step a line' });
+    all.value = lines(f.list);
+    const picks = t.fields.filter((x) => x.type === 'select' && x.choices?.length && !['status', 'stage'].includes(x.key));
+    const by = h('select', { class: 'pj-steps-by' }, h('option', { value: '' }, `The same for every ${one}`), ...picks.map((x) => h('option', { value: x.id }, `By ${x.name}`)));
+    by.value = f.kinds?.field && picks.some((x) => x.id === f.kinds.field) ? f.kinds.field : '';
+    const boxes = new Map();
+    const kinds = h('div', { class: 'pj-steps-kinds' });
+    const draw = () => {
+      const kf = picks.find((x) => x.id === by.value);
+      kinds.replaceChildren(...(kf ? kf.choices.map((c) => {
+        const ta = boxes.get(c.id) || h('textarea', { rows: 4, 'data-kind': c.id, placeholder: 'Empty: starts with the steps above' });
+        if (!boxes.has(c.id)) { ta.value = lines(f.kinds?.field === kf.id ? f.kinds.lists?.[c.id] : null); boxes.set(c.id, ta); }
+        return h('label', {}, c.label, ta);
+      }) : []));
+    };
+    by.addEventListener('change', draw);
+    draw();
+    sheet(`${f.name}: starting steps`, [
+      h('label', {}, `Every new ${one} starts with`, all),
+      h('label', {}, 'Steps for each kind', by),
+      h('p', { class: 'day-hint' }, `A ${one} given a kind takes that kind’s steps, until someone ticks or changes one. ${one[0].toUpperCase() + one.slice(1)}s already made keep theirs.`),
+      kinds,
+    ], () => prSchema(p, { op: 'updateField', typeId: t.id, fieldId: f.id, list: split(all.value), kinds: by.value ? { field: by.value, lists: Object.fromEntries([...boxes].map(([id, ta]) => [id, split(ta.value)])) } : f.kinds ? null : undefined }));
   }
   function prAddField(p, t) {
     const name = h('input', { placeholder: 'Close date' });

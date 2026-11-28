@@ -146,6 +146,28 @@ try {
   ok(await A.until(`${rows}.at(-2)?.classList.contains('skip') && ${rows}.at(-2).querySelector('.pj-cl-skip')?.textContent === 'Not needed' && ${rows}.at(-2).querySelector('input').disabled`), '⋯ → Not needed keeps it on the list, struck out, marked Not needed');
   ok(await A.until(`/not needed/.test(${P('.pj-panel .pj-cl-n')}?.textContent || '')`), 'and the count says how many aren’t needed: ' + await A.ev(`${P('.pj-panel .pj-cl-n')}?.textContent`));
   await shot('board-job');
+  // Starting steps for each kind of job (tests/kind_steps.mjs): the checklist's ⌄ in a table → Starting steps….
+  {
+    const bp = (await api('GET', '/projects')).find((x) => x.name === 'Board');
+    const bt = bp.types[0];
+    await api('POST', `/projects/${bp.id}/schema`, { op: 'addField', typeId: bt.id, type: 'select', name: 'Kind of job', choices: ['Repair', 'Install'] });
+    await api('POST', `/projects/${bp.id}/schema`, { op: 'addView', typeId: bt.id, name: 'Table', kind: 'table' });
+    await A.until(`[...document.querySelectorAll('#projects .pj-views button')].some((b) => b.textContent.includes('Table'))`);
+    await A.tap(`[...document.querySelectorAll('#projects .pj-views button')].find((b) => b.textContent.includes('Table'))`);
+    await A.until(`[...document.querySelectorAll('#projects .pj-th')].some((b) => b.textContent.includes('Checklist'))`);
+    await A.tap(`[...document.querySelectorAll('#projects .pj-th')].find((b) => b.textContent.includes('Checklist'))`);
+    await menuPick('Starting steps…');
+    ok(await A.until(`!!document.querySelector('#sheet .pj-steps-all')?.value.includes('Clean up')`), 'Starting steps… shows the steps every job starts with');
+    await A.ev(`(() => { const s = document.querySelector('#sheet .pj-steps-by'); s.value = [...s.options].find((o) => o.textContent === 'By Kind of job').value; s.dispatchEvent(new Event('change')); return true; })()`);
+    ok(await A.until(`document.querySelectorAll('#sheet .pj-steps-kinds textarea').length === 2`), 'By Kind of job gives a box for each kind');
+    await A.ev(`(() => { const ta = document.querySelector('#sheet .pj-steps-kinds textarea'); ta.value = 'Find the fault\\nFix it'; return true; })()`);
+    await A.tap(`document.querySelector('#sheet .primary-btn')`);
+    await sleep(500);
+    const cf = (await api('GET', '/projects')).find((x) => x.name === 'Board').types[0].fields.find((x) => x.type === 'checklist');
+    const kf = (await api('GET', '/projects')).find((x) => x.name === 'Board').types[0].fields.find((x) => x.name === 'Kind of job');
+    ok(cf.kinds?.field === kf.id && cf.kinds.lists[kf.choices[0].id]?.join('|') === 'Find the fault|Fix it' && !cf.kinds.lists[kf.choices[1].id], 'saving gives Repair its own steps, Install the list’s: ' + JSON.stringify(cf.kinds));
+    await A.tap(`[...document.querySelectorAll('#projects .pj-views button')].find((b) => b.textContent.includes('▥'))`);
+  }
   // Delete a column that has a job: its jobs move.
   await menu('Leads', 'Delete column');
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.classList.contains('danger')).click(); true`);

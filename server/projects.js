@@ -13,7 +13,7 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import { privateIp, safeFetch } from './safefetch.js';
-import { TRADES, tradeType, tradeMenu, companionTypes, COMPANIONS } from './trades.js';
+import { TRADES, KIND_STEPS, tradeType, tradeMenu, companionTypes, COMPANIONS } from './trades.js';
 import * as FX from './formula.js';
 import { TECH_TEMPLATE, TECH_LATER, techPrefix } from './tech.js';
 
@@ -856,6 +856,12 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     // some records (Bugs): by key and choice label in the definition, by id here.
     const byKey = (k) => t.fields.find((f) => f.key === k);
     const choiceIds = (f, labels) => (labels || []).map((l) => f?.choices?.find((c) => c.label === l)?.id).filter(Boolean);
+    // A checklist's steps for each kind of job: by the kind field's key and choice labels there, by id here.
+    for (const f of t.fields) {
+      const sk = f.type === 'checklist' && src.fields.find((x) => x.key === f.key)?.kinds;
+      const kf = sk && byKey(sk.field);
+      if (kf) f.kinds = cleanKinds(t, { field: kf.id, lists: Object.fromEntries(Object.entries(sk.lists || {}).map(([label, l]) => [kf.choices?.find((c) => c.label === label)?.id, l])) });
+    }
     for (const f of t.fields) {
       const sf = src.fields.find((x) => x.key === f.key);
       const on = sf?.showIf && byKey(sf.showIf.field);
@@ -867,6 +873,20 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
     });
     return t;
   }
+  // A checklist's steps for each kind of job (tests/kind_steps.mjs): { field: a pick-one field of the same list,
+  // lists: { choice id: steps } }. Blank steps, empty lists and choices that aren't there are dropped.
+  function cleanKinds(t, k) {
+    const kf = k && t.fields.find((x) => x.id === k.field);
+    if (!kf || kf.type !== 'select') return undefined;
+    const lists = {};
+    for (const c of kf.choices || []) {
+      const l = Array.isArray(k.lists?.[c.id]) ? k.lists[c.id].map((x) => cleanText(x, 120)).filter(Boolean).slice(0, 60) : [];
+      if (l.length) lists[c.id] = l;
+    }
+    return { field: kf.id, lists };
+  }
+  // The steps a record starts with: its kind's, else the checklist's own.
+  const startSteps = (f, kind) => (f.kinds && kind && f.kinds.lists?.[kind]) || f.list || [];
   // What a job field carries besides its type: a checklist's or readings' starting lines, how a measurement is
   // taken (width × height, length × width, or length) and in what unit, a hint under the name.
   function fieldExtras(f) {
@@ -1310,6 +1330,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
   function applyValues(ws, p, t, rec, values, opts) {
     if (!values || typeof values !== 'object') return rec;
     const before = JSON.stringify(t.fields.map((f) => f.choices?.length || 0));
+    const kindWas = new Map(t.fields.filter((f) => f.type === 'checklist' && f.kinds).map((f) => [f.id, rec.values[f.kinds.field]]));
     for (const [k, v] of Object.entries(values)) {
       const f = fieldOf(t, k);
       if (!f || f.type === 'autonumber') continue;
@@ -1326,6 +1347,19 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
       const val = cleanValue(ws, p, t, f, v, { ...opts, rec });
       if (val === undefined) delete rec.values[f.id];
       else rec.values[f.id] = val;
+    }
+    // A job given its kind (made with it, or picked later) takes that kind's steps, while nobody has touched the
+    // ones it has: none ticked, skipped, added, reworded or moved, and none sent with it.
+    const sent = new Set(Object.keys(values).map((k) => fieldOf(t, k)?.id));
+    for (const [fid, was] of kindWas) {
+      const f = t.fields.find((x) => x.id === fid);
+      const now = rec.values[f.kinds.field];
+      if (now === was || sent.has(fid)) continue;
+      const items = rec.values[fid]?.items || [];
+      if (items.some((x) => x.done || x.skip) || items.map((x) => x.text).join('\n') !== startSteps(f, was).join('\n')) continue;
+      const steps = startSteps(f, now);
+      if (steps.length) rec.values[fid] = { items: steps.map((text) => ({ id: rid(6), text, done: false })) };
+      else delete rec.values[fid];
     }
     // New choices change the project too.
     if (JSON.stringify(t.fields.map((f) => f.choices?.length || 0)) !== before) projectNews(p);
@@ -1491,6 +1525,11 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
         if (f.type === 'rollup' && (body.via !== undefined || body.fn !== undefined || body.of !== undefined)) setRollup(p, t, f, body);
         if (body.reveal !== undefined && f.type === 'secret') f.reveal = REVEAL.includes(body.reveal) ? body.reveal : f.reveal;
         if (Array.isArray(body.list) && (f.type === 'checklist' || f.type === 'readings')) f.list = fieldExtras({ type: f.type, list: body.list }).list;
+        // Steps by kind of job; null turns them off (and kept off, so start doesn't bring the trade's back).
+        if (body.kinds !== undefined && f.type === 'checklist') {
+          if (body.kinds === null) f.kinds = null;
+          else { const k = cleanKinds(t, body.kinds); if (!k) throw bad('Steps go by a pick-one field of this list, like Kind of job.'); f.kinds = k; }
+        }
         if (body.unit !== undefined && f.type === 'measure') f.unit = fieldExtras({ type: 'measure', mode: f.mode, unit: body.unit }).unit;
         // A sign-off's form (one of the team's, or none for the plain sign-off) and the stage a record moves to once signed.
         if (body.form !== undefined && f.type === 'signature') {
@@ -2848,5 +2887,20 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { mayEditJob, onVisit: (rec, memberId) => !!visitorsOf(rec.id)?.has(memberId), seesRec, seesJob, reseeJob, reseeAll, reseeWs, isJobT, pricedWrite, rawFor, seesPrices, viewOf, FULL, isPriced, pricedIds, redactValues, jobRecord, announceRecord, publicRecordOf: (rec, view = null) => publicRecord(rec, view), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  // Trade lists made before steps by kind get their trade's, once (start): only where the team hasn't changed the
+  // checklist's steps or set (or turned off) steps by kind already.
+  function kindStepsAll() {
+    let n = 0;
+    for (const p of Object.values(db.projects)) for (const t of p.types || []) {
+      const steps = t.trade && KIND_STEPS[t.trade];
+      const f = steps && t.fields.find((x) => x.key === 'checklist' && x.type === 'checklist');
+      const kf = f && t.fields.find((x) => x.key === 'kind' && x.type === 'select');
+      if (!kf || f.kinds !== undefined || (f.list || []).join('\n') !== TRADES[t.trade].checklist.join('\n')) continue;
+      f.kinds = cleanKinds(t, { field: kf.id, lists: Object.fromEntries(Object.entries(steps).map(([label, l]) => [kf.choices?.find((c) => c.label === label)?.id, l])) });
+      n++;
+    }
+    if (n) save();
+    return n;
+  }
+  return { kindStepsAll, mayEditJob, onVisit: (rec, memberId) => !!visitorsOf(rec.id)?.has(memberId), seesRec, seesJob, reseeJob, reseeAll, reseeWs, isJobT, pricedWrite, rawFor, seesPrices, viewOf, FULL, isPriced, pricedIds, redactValues, jobRecord, announceRecord, publicRecordOf: (rec, view = null) => publicRecord(rec, view), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }
