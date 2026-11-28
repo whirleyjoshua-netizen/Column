@@ -3781,6 +3781,8 @@ function campsOffJob(rec) {
 const jcField = (rec) => { const p = rec && db.projects[rec.projectId]; const t = p && PJ.typeOfP(p, rec.typeId); return PJ.isJobT(t) ? t.fields.find((f) => f.type === 'checklist') || null : null; };
 const jcOf = (recId) => { for (const c of Object.values(db.campaigns)) if (c.jobId === recId) return c; return null; };
 const jcTasks = (c) => goalsInOrder(c).flatMap((g) => tasksInOrder(g));
+// A step on a job's Checklist: the job's visits are its time, so workload and the forecast leave it out.
+const jobStep = (t) => !!taskCamp(t)?.jobId;
 let jcSyncing = false;
 function jcFromField(rec) {
   if (jcSyncing || !rec || !db.records[rec.id]) return;
@@ -6950,7 +6952,7 @@ function workload(ws, week) {
   const by = new Map(ws.members.map((x) => [x.id, { id: x.id, name: x.name, role: x.role, open: 0, overdue: 0, dueWeek: 0, noDate: 0, doneWeek: 0, bookedMin: 0, visits: 0, campaigns: 0, perDay: days.map(() => ({ min: 0, due: 0 })) }]));
   let unassigned = 0;
   for (const t of Object.values(db.tasks)) {
-    if (t.wsId !== ws.id || t.skipped) continue;
+    if (t.wsId !== ws.id || t.skipped || jobStep(t)) continue;
     const doneDay = t.done && t.doneAt ? teamDay(ws.id, t.doneAt) : null;
     const doers = taskDoers(ws, t);
     if (!t.done && !doers.length) unassigned++;
@@ -7099,7 +7101,7 @@ function forecast(ws, auth, weeks = FC_WEEKS) {
 
   // Tasks.
   for (const t of Object.values(db.tasks)) {
-    if (t.wsId !== ws.id || t.done || t.skipped) continue;
+    if (t.wsId !== ws.id || t.done || t.skipped || jobStep(t)) continue;
     const g = db.goals[t.goalId], c = taskCamp(t);
     let d = t.due || null, from = d ? 'its due date' : null;
     if (!d && g?.due) { d = g.due; from = 'its step’s date'; }
