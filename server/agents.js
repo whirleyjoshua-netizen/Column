@@ -612,12 +612,12 @@ export function agentsModule({ autoEvents = [], sees = () => true, offWhy = () =
       },
     },
     add_bill: {
-      kind: 'write', label: (a) => `Bill: ${words(a.name, 60)} · $${Number(a.amount) || 0} ${a.repeat || 'monthly'}, next due ${a.due}${a.scope === 'business' ? ' (business)' : ''}`,
+      kind: 'write', label: (a) => `Bill: ${words(a.name, 60)} · $${Number(a.amount) || 0} ${a.repeat || 'once'}, next due ${a.due}${a.scope === 'business' ? ' (business)' : ''}`,
       description: 'Track a bill in Finance: name, amount in dollars, the next date it’s due (YYYY-MM-DD), how often (once, weekly, monthly, quarterly, yearly), business (owners only) or personal. It shows on the Day when due.',
       parameters: { type: 'object', properties: { name: { type: 'string' }, amount: { type: 'number' }, due: { type: 'string', description: 'YYYY-MM-DD' }, repeat: { type: 'string', enum: ['once', 'weekly', 'monthly', 'quarterly', 'yearly'] }, scope: { type: 'string', enum: ['business', 'personal'] }, autopay: { type: 'boolean' }, why: { type: 'string' } }, required: ['name', 'amount', 'due'] },
       check(cx, a) { if (!cleanText(a.name, 80) || !isDay(a.due) || !(Number(a.amount) >= 0)) throw new Error('A bill needs a name, an amount and a due date (YYYY-MM-DD).'); },
       async run(cx, a) {
-        const r = await cx.call('POST', '/api/bills', { name: a.name, amount: Number(a.amount), due: a.due, repeat: a.repeat || 'monthly', scope: a.scope === 'business' ? 'business' : 'personal', autopay: !!a.autopay });
+        const r = await cx.call('POST', '/api/bills', { name: a.name, amount: Number(a.amount), due: a.due, repeat: a.repeat || 'once', scope: a.scope === 'business' ? 'business' : 'personal', autopay: !!a.autopay });
         return done(r, { kind: 'bill', id: r.body?.id, label: a.name }, { undo: { method: 'DELETE', path: '/api/bills/' + r.body?.id } });
       },
     },

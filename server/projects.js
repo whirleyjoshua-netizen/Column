@@ -1105,7 +1105,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
   }
   // A value made to fit its field, or undefined to clear it. Unknown choices are added when allowed (imports
   // and the API), so a sync never fails on a new stage name.
-  function cleanValue(ws, p, t, f, v, { addChoices = false, rec = null } = {}) {
+  function cleanValue(ws, p, t, f, v, { addChoices = false, rec = null, by = null } = {}) {
     if (v === null || v === undefined || v === '') return undefined;
     const str = (n) => cleanText(v, n);
     switch (f.type) {
@@ -1206,8 +1206,15 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
         if (!list) throw bad(`${f.name}: send a checklist as { items: [...] }.`);
         const items = list.slice(0, 100).map((x) => (typeof x === 'string' ? { text: x } : x || {})).map((x) => ({
           id: rowId(x.id), text: cleanText(x.text, 200), done: !!x.done,
-          ...(x.done && x.by ? { by: cleanText(x.by, 60) } : {}), ...(x.done && Number.isFinite(x.at) ? { at: x.at } : {}),
         })).filter((x) => x.text);
+        // Who ticked a step and when are the server's (the team audit, 2026-11-28): a step already ticked keeps its own;
+        // a new tick takes the name of whoever is saving (`by`, from the route) and now, never what was sent.
+        const had = new Map((rec?.values?.[f.id]?.items || []).map((x) => [x.id, x]));
+        for (const x of items) {
+          if (!x.done) continue;
+          const was = had.get(x.id);
+          if (was?.done) { if (was.by) x.by = was.by; if (was.at) x.at = was.at; } else { if (by) x.by = cleanText(by, 60); x.at = Date.now(); }
+        }
         return items.length ? { items } : undefined;
       }
       // Openings (width × height), areas (length × width) or runs (length), each with a label and how many.
@@ -1713,7 +1720,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
             if (rec) {
               if (!mayEditJob(rec, auth, p, t)) throw bad(`${recName(p, rec)}: ${JOB_LOCKED}`);
               const before = { ...rec.values };
-              applyValues(ws, p, t, rec, row, { addChoices: true });
+              applyValues(ws, p, t, rec, row, { addChoices: true, by: auth.member });
               if (quoteLocked(t, rec, before)) rec.values = before; // an accepted quote's lines stay as accepted
               logChanges(ws, p, t, rec, before, auth.member);
               rec.updatedAt = Date.now();
@@ -1807,6 +1814,40 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
         save();
         return send(res, 200, { value });
       }
+      // A checklist on site, one step at a time (the team audit, 2026-11-28): two people ticking at once can't undo each
+      // other, and the name on a tick is whoever is signed in. On a job, ticking is for whoever's on it (its visits
+      // too); changing the list is for those who run it (owners, admins, whoever made it, a person field).
+      if (c === 'checklist' && d && m === 'POST') {
+        const f = fieldOf(t, d);
+        if (f?.type !== 'checklist') return send(res, 404, { error: 'That checklist is gone.' });
+        const body = await readJson(req, 10_000);
+        const op = String(body.op || '');
+        if (!['tick', 'untick', 'add', 'remove'].includes(op)) return send(res, 400, { error: 'Tick, untick, add or remove a step.' });
+        if (isJobT(t) && !mayEditJob(rec, auth, p, t) && (op === 'add' || op === 'remove' || !visitorsOf(rec.id)?.has(auth.memberId))) {
+          return send(res, 403, { error: op === 'add' || op === 'remove' ? 'Only whoever this job is assigned to, and owners and admins, can change its steps.' : 'Only the people on this job can tick its steps.' });
+        }
+        const cur = rec.values[f.id]?.items ? rec.values[f.id] : { items: (f.list || []).map((text, i) => ({ id: `s${i}`, text, done: false })) };
+        const items = cur.items.map((x) => ({ ...x }));
+        let text;
+        if (op === 'add') {
+          text = cleanText(body.text, 200);
+          if (!text) return send(res, 400, { error: 'Write the step.' });
+          if (items.length >= 100) return send(res, 400, { error: 'A checklist holds 100 steps.' });
+          items.push({ id: rid(6), text, done: false });
+        } else {
+          const i = items.findIndex((x) => x.id === String(body.itemId || ''));
+          if (i < 0) return send(res, 404, { error: 'That step is gone.' });
+          text = items[i].text;
+          if (op === 'remove') items.splice(i, 1);
+          else if (op === 'tick') { if (!items[i].done) items[i] = { id: items[i].id, text, done: true, by: auth.member, at: Date.now() }; }
+          else items[i] = { id: items[i].id, text, done: false };
+        }
+        rec.values[f.id] = { items };
+        logTo(rec, { kind: 'change', field: `${f.name}: ${text}`, fieldId: f.id, from: op === 'add' ? 'Not on the list' : op === 'remove' ? 'On the list' : op === 'tick' ? 'Not done' : 'Done', to: op === 'add' ? 'Added' : op === 'remove' ? 'Removed' : op === 'tick' ? 'Done' : 'Not done', by: auth.member });
+        rec.updatedAt = Date.now();
+        recordNews(rec, 'record.updated', auth.member);
+        return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
+      }
       // A new label: a new tag, so the old label stops working.
       if (c === 'tag' && m === 'POST') {
         rec.tag = newTag();
@@ -1863,7 +1904,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
         const held = holdDiscount(ws, auth, p, t, rec, body.values, req, body);
         if (held) return send(res, held.status, held.body);
         const before = { ...rec.values };
-        applyValues(ws, p, t, rec, body.values, { addChoices: false });
+        applyValues(ws, p, t, rec, body.values, { addChoices: false, by: auth.member });
         if (quoteLocked(t, rec, before)) {
           rec.values = before;
           return send(res, 400, { error: 'The customer accepted this quote, so its lines can’t change. Make a new quote for the changes.' });
@@ -2377,7 +2418,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
         if (rec) {
           if (!mayEditJob(rec, auth, p, t)) return send(res, 403, { error: JOB_LOCKED });
           const before = { ...rec.values };
-          applyValues(ws, p, t, rec, fields, { addChoices: true });
+          applyValues(ws, p, t, rec, fields, { addChoices: true, by: auth.member });
           if (quoteLocked(t, rec, before)) { rec.values = before; throw bad('The customer accepted this quote, so its lines can’t change.'); }
           { const gate = stageGate?.(rec, before, null); if (gate) { rec.values = before; return send(res, gate.status, { error: gate.error, steps: gate.steps }); } }
           logChanges(ws, p, t, rec, before, auth.member);
@@ -2415,7 +2456,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
       if (pricedWrite(ws.id, auth.memberId, p, t, inFields(t, body.fields), rec)) return send(res, 403, PRICES_403);
       { const held = holdDiscount(ws, auth, p, t, rec, inFields(t, body.fields), null, null); if (held) return send(res, held.status, held.body); }
       const before = { ...rec.values };
-      applyValues(ws, p, t, rec, inFields(t, body.fields), { addChoices: true });
+      applyValues(ws, p, t, rec, inFields(t, body.fields), { addChoices: true, by: auth.member });
       if (quoteLocked(t, rec, before)) { rec.values = before; throw bad('The customer accepted this quote, so its lines can’t change.'); }
       { const gate = stageGate?.(rec, before, null); if (gate) { rec.values = before; return send(res, gate.status, { error: gate.error, steps: gate.steps }); } }
       logChanges(ws, p, t, rec, before, auth.member);
