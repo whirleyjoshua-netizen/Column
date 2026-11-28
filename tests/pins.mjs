@@ -149,7 +149,9 @@ await A.until(`!document.querySelector('#app').classList.contains('hidden')`);
 await sleep(600);
 ok((await pins()).length === 2, 'pins come back after a reload: ' + (await pins()).join(', '));
 ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'the page does not scroll sideways on a phone');
-ok(await A.ev(`[...document.querySelectorAll('#topTabs .tab-pin')].length === 2 && [...document.querySelectorAll('#topTabs .tab-pin')].every((b) => b.getBoundingClientRect().width > 60)`), 'pins keep their names on a phone (the bar scrolls instead)');
+// The redesign (2026-11-28): on a phone your pins are in More (the tab bar's last place), each with its name.
+await A.ev(`document.querySelector('#appDock [data-go="go:more"]').click(); true`);
+ok(await A.until(`[...document.querySelectorAll('#menuPage .more-row[data-go^="pin:"]')].length === 2 && [...document.querySelectorAll('#menuPage .more-row[data-go^="pin:"]')].every((b) => b.textContent.trim().length > 2)`), 'on a phone your pins are in More, with their names');
 
 // The server keeps only sensible pins
 const r = await api('PUT', '/account/pins', { pins: [{ go: 'camp:abc', label: 'x'.repeat(200) }, { go: 'camp:abc', label: 'again' }, { go: 'javascript:alert(1)', label: 'bad' }, { go: 'rec:../../x', label: 'bad' }, ...Array.from({ length: 20 }, (_, i) => ({ go: 'stack:s' + i, label: 'S' + i }))] });
