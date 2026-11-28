@@ -168,13 +168,11 @@ try {
   await A.ev(`${addQ}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); true`);
   ok(await A.until(`document.querySelector('#camps .cc-phase[data-phase="${prep.id}"]')?.textContent.includes('Measure the windows')`, 5000), 'a task added in a phase shows right away');
   ok(await A.until(`document.activeElement === ${addQ} && !${addQ}.value`, 3000), 'and the add field still has the cursor');
-  // The builder's last stage has no stray "null" where Next would be.
+  // Edit details opens the one-page builder (it replaced the four stages), with no stray "null" anywhere.
   await A.ev(`${T('[aria-label="Campaign options"]')}.click(); true`);
   await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent.includes('Edit details'))`);
   await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent.includes('Edit details')).click(); true`);
-  await A.until(`!!document.querySelector('.cb-stage[data-stage="3"]')`);
-  await A.ev(`document.querySelector('.cb-stage[data-stage="3"]').click(); true`);
-  ok(await A.until(`!!document.querySelector('.cb-stage-nav .cb-back')`) && !/null/.test(await A.ev(`document.querySelector('.cb-stage-nav').textContent`)), 'the builder’s last stage shows Back and nothing else: ' + await A.ev(`document.querySelector('.cb-stage-nav').textContent`));
+  ok(await A.until(`!!document.querySelector('#sheet .cb-main')`) && !/\bnull\b/.test(await A.ev(`document.querySelector('#sheet .sheet').textContent`)) && await A.ev(`document.querySelector('#sheet .sheet > .btns .primary-btn')?.textContent`) === 'Save', 'Edit details opens the one-page builder, with Save and no stray null');
   // The drawer's "waits for" chip opens what it waits for (a live check, 2026-11-20).
   await A.ev(`document.querySelector('#sheet [aria-label=Close]')?.click(); true`);
   const X0 = await api('POST', '/tasks', { goalId: inst.id, text: 'Pick up the brackets' });

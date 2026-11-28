@@ -149,7 +149,10 @@ try {
   await sleep(400);
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth && !!${T('.cc-ptools')}`), 'on a phone the tools fit, nothing sideways');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
-  // A member: Add tool, but no Add automation.
+  // A member who runs the campaign: Add tool, but no Add automation (since the edit lock, 2026-11-27, only whoever
+  // runs a campaign, its maker and admins plan it).
+  const samId = (await api('GET', '/state')).workspace.members.find((m) => m.name === 'Sam').id;
+  await api('PATCH', '/campaigns/' + camp.id, { assigneeId: samId });
   await open(sam.token);
   await A.tap(`${tile('Send quotes')}.querySelector('.cc-row-name')`);
   await A.until(`${T('.cc-ppanel .cc-pp-name')}?.value === 'Send quotes'`);

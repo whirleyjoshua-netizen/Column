@@ -109,16 +109,15 @@ try {
   await A.ev(`document.querySelector('[data-tab=camps]').click(); true`);
   await A.until(`!![...document.querySelectorAll('#camps .cc-row, #camps .cc-rrow')].find((x) => x.textContent.includes('Lopez')) || !!document.querySelector('.camp-card')`);
   if (!(await A.ev(`!![...document.querySelectorAll('#camps .cc-row, #camps .cc-rrow')].find((x) => x.textContent.includes('Lopez'))`))) await A.tap(`[...document.querySelectorAll('.camp-card')].find((c) => c.textContent.includes('Fall calls'))`); await A.until(`!!document.querySelector('#camps .cc-edit, #camps .cc-done-edit')`); await A.ev(`document.querySelector('#camps .cc-edit')?.click(); true`); // a campaign opens to be read: Edit (2026-11-27)
-  await A.until(`!![...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez'))`);
-  await A.tap(`[...document.querySelectorAll('#camps .cc-row')].find((x) => x.textContent.includes('Lopez')).querySelector('.cc-row-name')`);
-  await A.tap(`document.querySelector('#camps .cc-td-full')`);
+  // A member reads the campaign (the read view, 2026-11-27): a task's name opens its window.
+  await A.until(`!![...document.querySelectorAll('#camps .cc-rrow')].find((x) => x.textContent.includes('Lopez'))`);
+  await A.tap(`[...document.querySelectorAll('#camps .cc-rrow')].find((x) => x.textContent.includes('Lopez')).querySelector('.cc-rrow-name')`);
   ok(await A.until(`[...document.querySelectorAll('#sheet .td-sec-h')].some((x) => x.textContent.startsWith('From the step')) && [...document.querySelectorAll('#sheet .td-res .res-row b')].map((b) => b.textContent).join() === 'Call script'`), 'Sam’s task drawer shows From the step, with the call script');
   await shot('task-win');
   await A.ev(`document.querySelector('#sheet [aria-label=Close]').click(); true`);
-  await A.tap(`document.querySelector('#camps .cc-phase-h [aria-label^="Phase settings"]')`);
-  await A.until(`!!document.querySelector('#sheet .step-win')`);
-  await A.tap(`[...document.querySelectorAll('#sheet .win-tabs button')].find((b) => b.textContent.startsWith('Resources'))`);
-  ok(await A.until(`!!document.querySelector('#sheet .res-row') && !document.querySelector('#sheet .res-add') && !document.querySelector('#sheet .res-row [aria-label^=Remove]')`), 'on the step he sees the script but can’t add or remove');
+  // He reads the campaign: the phase he's on shows with his task, and there's no Phase settings or Edit to change the step.
+  ok(await A.until(`!!document.querySelector('#camps .cc-rphase.is-now') && document.querySelector('#camps .cc-rphase.is-now').getBoundingClientRect().height > 40`), 'the phase he’s on shows, with its tasks');
+  ok(await A.ev(`!document.querySelector('#camps [aria-label^="Phase settings"]') && !document.querySelector('#camps .cc-edit')`), 'he can’t open the step’s settings or Edit, so he can’t add or remove its resources');
   ok(A.errors.length === 0, 'no script errors' + (A.errors.length ? ': ' + A.errors.join(' | ') : ''));
 } catch (e) { ok(false, 'threw: ' + e.stack); }
 A?.close();

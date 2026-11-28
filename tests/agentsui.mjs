@@ -112,7 +112,7 @@ try {
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(auth.token)})); location.reload(); true`).catch(() => {});
   await sleep(1200);
   ok(await A.until(`!document.querySelector('#app').classList.contains('hidden')`), 'Ada is in');
-  ok(await A.until(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.textContent).join() === 'Home,Agents,Workspace,Apps & Integrations'`), 'Agents is on the tab bar: ' + await A.ev(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.textContent).join()`));
+  ok(await A.until(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.textContent).join() === 'Home,Chat,Agents,Workspace,Apps & Integrations'`), 'Agents is on the tab bar (Chat is too, since f638ebc): ' + await A.ev(`[...document.querySelectorAll('#tabs button[data-tab]:not(.tab-sub)')].map((b) => b.textContent).join()`));
   await A.click('#tabs [data-tab=agents]');
   ok(await A.until(`document.querySelector('#tool h2')?.textContent.includes('Your team') && document.querySelectorAll('#tool .ag-card').length === 4`), 'the Agents tab opens Your team, with four specialists');
   ok(await A.ev(`[...document.querySelectorAll('#tool .ag-card b')].map((b) => b.textContent).join('|') === 'Chief of Staff|Client & Sales Manager|Operations Manager|Marketing Manager'`), 'Chief of Staff, Client & Sales Manager, Operations Manager, Marketing Manager');

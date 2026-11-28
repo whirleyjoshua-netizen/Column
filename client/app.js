@@ -8294,7 +8294,7 @@
     const phase = (g) => {
       const gp = goalProgress(g), top = tasksInOrder(g.id).filter((t) => !t.parentId || !taskById(t.parentId));
       const waits = goalBlockers(g);
-      return h('section', { class: 'cc-rphase' + (gp.frac >= 1 ? ' done' : g === nowPhase ? ' now' : ''), 'data-goal': g.id },
+      return h('section', { class: 'cc-rphase' + (gp.frac >= 1 ? ' done' : g === nowPhase ? ' is-now' : ''), 'data-goal': g.id },
         h('div', { class: 'cc-rphase-h' }, h('b', {}, g.title), h('small', {}, [gp.label, g.due ? 'by ' + dueLabel(g.due) : '', waits.length ? 'waits for ' + waits.map((x) => x.title).join(', ') : ''].filter(Boolean).join(' · ')), bar(gp.frac, c.color)),
         top.length ? h('div', { class: 'cc-rtasks' }, top.flatMap((t) => [row(t), ...subtasksOf(t).map((x) => row(x, true))])) : h('p', { class: 'day-hint' }, 'No tasks in this phase yet.'));
     };
@@ -8348,7 +8348,7 @@
       blockers.length || unlocks.length ? sec('Waits for', h('div', { class: 'td-deps' },
         blockers.length ? blockers.map((x) => h('span', { class: 'td-dep' }, x.hidden ? 'Something in a campaign you can’t see' : x.text || x.title)) : h('small', { class: 'muted' }, 'Nothing')),
         unlocks.length ? h('small', { class: 'td-opens' }, 'Finishing it opens: ' + unlocks.map((x) => x.text).join(', ')) : null) : null,
-      rs.length ? sec(`From the step · ${rs.length}`, h('div', { class: 'res-list td-res' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, r.title || r.name || r.url || 'Open'))))) : null,
+      rs.length ? sec(`From the step · ${rs.length}`, h('div', { class: 'res-list td-res' }, rs.map((r) => h('div', { class: 'res-row', 'data-res': r.kind }, h('button', { class: 'res-open', onclick: () => resOpen(r) }, h('span', { class: 'res-ic' }, RES_IC[r.kind]), h('span', {}, h('b', {}, resName(r)))))))) : null,
       files.length ? sec(`Files · ${files.length}`, h('div', { class: 'tr-files' }, files.map((it) => h('button', { class: 'btn small', onclick: () => openPreview(it) }, it.name || 'Note')))) : null,
       sec(`Comments${t.comments?.length ? ' · ' + t.comments.length : ''}`, h('div', { class: 'td-comments' },
         (t.comments || []).map((cm) => h('div', { class: 'td-comment', 'data-comment': cm.id }, avatar(cm.memberId), h('div', {}, h('div', { class: 'td-c-h' }, h('b', {}, cm.by), h('small', {}, ' · ' + ago(cm.at))), h('p', {}, cm.text)))),

@@ -5289,7 +5289,7 @@ body:not(.wide) .kapp-grid { grid-template-columns: 1fr; }
 .cc-rprog > b { font-size: 22px; }
 .cc-rprog .bar { flex-basis: 100%; margin-top: 6px; }
 .cc-rphase { border: 1px solid var(--line); border-radius: 12px; background: var(--card); overflow: hidden; }
-.cc-rphase.now { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.cc-rphase.is-now { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .cc-rphase-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .cc-rphase-h small { color: var(--muted); }
 .cc-rphase-h .bar { flex-basis: 100%; }
