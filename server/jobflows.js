@@ -326,7 +326,7 @@ export function jobFlowsModule(ctx) {
       case 'work': {
         const cl = v(fieldBy(t, (f) => f.type === 'checklist'));
         const items = cl?.items || [];
-        const ticked = fieldBy(t, (f) => f.type === 'checklist') ? items.length > 0 && items.every((i) => i.done) : !!g.marked;
+        const ticked = fieldBy(t, (f) => f.type === 'checklist') ? items.length > 0 && items.every((i) => i.done || i.skip) : !!g.marked; // a step not needed counts (tests/job_tasks.mjs)
         const photos = !s.settings?.photos || filled(v(fieldBy(t, (f) => f.key === 'after') || fieldBy(t, (f) => f.type === 'files')));
         return ticked && photos;
       }
@@ -621,7 +621,7 @@ export function jobFlowsModule(ctx) {
           scheduled: df ? rec.values[df.id] || null : null,
           run: run ? summary(ws, auth, run) : null,
           ...(isAdmin(auth) && itemsField(t) ? { total: itemsTotals(rec.values[itemsField(t).id]).total || 0 } : {}),
-          legacy: !activeRun(rec.id) && Object.values(db.campaigns).some((c) => !isJobRun(c) && c.recordId === rec.id),
+          legacy: !activeRun(rec.id) && Object.values(db.campaigns).some((c) => !isJobRun(c) && c.type !== 'checklist' && c.recordId === rec.id),
           chatId: rec.chatId || null,
           updatedAt: rec.updatedAt,
         });
@@ -730,7 +730,7 @@ export function jobFlowsModule(ctx) {
     return out;
   }
   const suggestedStart = (t) => ({ service: 'service', install: 'install', cleaning: 'cleaning' })[TRADES[t?.trade]?.family] || 'service';
-  const isLegacy = (rec) => !activeRun(rec.id) && Object.values(db.campaigns).some((c) => !isJobRun(c) && c.recordId === rec.id);
+  const isLegacy = (rec) => !activeRun(rec.id) && Object.values(db.campaigns).some((c) => !isJobRun(c) && c.type !== 'checklist' && c.recordId === rec.id);
   const stageOfRec = (t, rec) => { const sf = fieldBy(t, (f) => f.type === 'select' && ['status', 'stage'].includes(f.key)); return sf ? sf.choices.find((c) => c.id === rec.values[sf.id])?.label || null : null; };
   function moveInfo(ws, auth) {
     const lists = [];

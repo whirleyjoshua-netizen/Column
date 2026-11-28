@@ -1205,7 +1205,7 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
         const list = Array.isArray(v) ? v : Array.isArray(v?.items) ? v.items : null;
         if (!list) throw bad(`${f.name}: send a checklist as { items: [...] }.`);
         const items = list.slice(0, 100).map((x) => (typeof x === 'string' ? { text: x } : x || {})).map((x) => ({
-          id: rowId(x.id), text: cleanText(x.text, 200), done: !!x.done,
+          id: rowId(x.id), text: cleanText(x.text, 200), done: !!x.done, ...(x.skip ? { skip: true } : {}), // skip: "not needed", kept so the record shows it
         })).filter((x) => x.text);
         // Who ticked a step and when are the server's (the team audit, 2026-11-28): a step already ticked keeps its own;
         // a new tick takes the name of whoever is saving (`by`, from the route) and now, never what was sent.
@@ -1822,9 +1822,13 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
         if (f?.type !== 'checklist') return send(res, 404, { error: 'That checklist is gone.' });
         const body = await readJson(req, 10_000);
         const op = String(body.op || '');
-        if (!['tick', 'untick', 'add', 'remove'].includes(op)) return send(res, 400, { error: 'Tick, untick, add or remove a step.' });
-        if (isJobT(t) && !mayEditJob(rec, auth, p, t) && (op === 'add' || op === 'remove' || !visitorsOf(rec.id)?.has(auth.memberId))) {
-          return send(res, 403, { error: op === 'add' || op === 'remove' ? 'Only whoever this job is assigned to, and owners and admins, can change its steps.' : 'Only the people on this job can tick its steps.' });
+        // Ticking is for whoever is on the job; changing the steps (add, remove, reword, move, mark not needed) is for whoever
+        // runs it (tests/job_tasks.mjs: its lead and admins add, reword, reorder and skip on site).
+        const OPS = ['tick', 'untick', 'add', 'remove', 'rename', 'move', 'skip', 'unskip'];
+        if (!OPS.includes(op)) return send(res, 400, { error: 'Tick, untick, add, remove, reword, move or skip a step.' });
+        const changes = op !== 'tick' && op !== 'untick';
+        if (isJobT(t) && !mayEditJob(rec, auth, p, t) && (changes || !visitorsOf(rec.id)?.has(auth.memberId))) {
+          return send(res, 403, { error: changes ? 'Only whoever this job is assigned to, and owners and admins, can change its steps.' : 'Only the people on this job can tick its steps.' });
         }
         const cur = rec.values[f.id]?.items ? rec.values[f.id] : { items: (f.list || []).map((text, i) => ({ id: `s${i}`, text, done: false })) };
         const items = cur.items.map((x) => ({ ...x }));
@@ -1838,12 +1842,26 @@ export function projectsModule({ onTouch = () => {}, jobCurrentWho = () => null,
           const i = items.findIndex((x) => x.id === String(body.itemId || ''));
           if (i < 0) return send(res, 404, { error: 'That step is gone.' });
           text = items[i].text;
+          const keep = items[i].skip ? { skip: true } : {};
           if (op === 'remove') items.splice(i, 1);
-          else if (op === 'tick') { if (!items[i].done) items[i] = { id: items[i].id, text, done: true, by: auth.member, at: Date.now() }; }
-          else items[i] = { id: items[i].id, text, done: false };
+          else if (op === 'tick') { if (!items[i].done) items[i] = { id: items[i].id, text, done: true, by: auth.member, at: Date.now(), ...keep }; }
+          else if (op === 'untick') items[i] = { id: items[i].id, text, done: false, ...keep };
+          else if (op === 'rename') {
+            const to = cleanText(body.text, 200);
+            if (!to) return send(res, 400, { error: 'Write the step.' });
+            if (to === text) return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
+            items[i] = { ...items[i], text: to };
+          } else if (op === 'move') {
+            const to = Math.max(0, Math.min(items.length - 1, Math.round(Number(body.to))));
+            if (!Number.isFinite(Number(body.to))) return send(res, 400, { error: 'Say where it goes.' });
+            items.splice(to, 0, ...items.splice(i, 1));
+          } else if (op === 'skip') items[i] = { ...items[i], skip: true };
+          else { const { skip, ...x } = items[i]; items[i] = x; }
         }
         rec.values[f.id] = { items };
-        logTo(rec, { kind: 'change', field: `${f.name}: ${text}`, fieldId: f.id, from: op === 'add' ? 'Not on the list' : op === 'remove' ? 'On the list' : op === 'tick' ? 'Not done' : 'Done', to: op === 'add' ? 'Added' : op === 'remove' ? 'Removed' : op === 'tick' ? 'Done' : 'Not done', by: auth.member });
+        const was = { add: 'Not on the list', remove: 'On the list', tick: 'Not done', untick: 'Done', rename: text, move: 'Where it was', skip: 'Needed', unskip: 'Not needed' }[op];
+        const now = { add: 'Added', remove: 'Removed', tick: 'Done', untick: 'Not done', rename: cleanText(body.text, 200), move: 'Moved', skip: 'Not needed', unskip: 'Needed' }[op];
+        logTo(rec, { kind: 'change', field: `${f.name}: ${text}`, fieldId: f.id, from: was, to: now, by: auth.member });
         rec.updatedAt = Date.now();
         recordNews(rec, 'record.updated', auth.member);
         return send(res, 200, publicRecord(rec, viewOf(ws.id, auth.memberId)));
@@ -2830,5 +2848,5 @@ footer{text-align:center;color:var(--muted);font-size:12px;margin-top:16px}
     projectNews(p);
     return { project: p, made, skipped };
   }
-  return { seesRec, seesJob, reseeJob, reseeAll, reseeWs, isJobT, pricedWrite, rawFor, seesPrices, viewOf, FULL, isPriced, pricedIds, redactValues, jobRecord, announceRecord, publicRecordOf: (rec, view = null) => publicRecord(rec, view), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
+  return { mayEditJob, onVisit: (rec, memberId) => !!visitorsOf(rec.id)?.has(memberId), seesRec, seesJob, reseeJob, reseeAll, reseeWs, isJobT, pricedWrite, rawFor, seesPrices, viewOf, FULL, isPriced, pricedIds, redactValues, jobRecord, announceRecord, publicRecordOf: (rec, view = null) => publicRecord(rec, view), typeOfP: (p, id) => typeOf(p, id), profileOf, moveLicensesOut, isProfile, autoSetClean, autoSetValues, autoUpdate, carryOver, dateField, dateOf, recName, importProject, cleanSpec, createRecord, publicRecord, updateRecord, route, v1, keyAuth, makeHook, publicHook, deliver, emit, quoteOf, quotePage, seesMsg, stateFor, sees, recordActivity, recordNews, words, fillFromProject, fromProjectOk, recordStory, priceList, recordAt, itemsTotals, shareRecord, TEMPLATES: Object.fromEntries(Object.entries(TEMPLATES).map(([k, t]) => [k, { name: t.name, icon: t.icon, about: t.about }])) };
 }

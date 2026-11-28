@@ -18549,15 +18549,35 @@
     const box = h('div', { class: 'pj-cl' });
     const bar = h('i');
     const count = h('small', { class: 'pj-cl-n' });
+    // Whoever runs the job fixes the list on site (column-fe's crew test: every crew did): reword, move, mark a step not
+    // needed (kept, so the job shows it was skipped), or remove it. Each step is a task in the job's Checklist.
+    const reword = (x, row) => {
+      const inp = h('input', { class: 'pj-it-in pj-cl-edit', value: x.text, 'aria-label': 'Reword the step' });
+      const done = (keep) => { const text = inp.value.trim(); if (keep && text && text !== x.text) step({ op: 'rename', itemId: x.id, text }); else draw(); };
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); done(true); } if (e.key === 'Escape') done(false); });
+      inp.addEventListener('blur', () => done(true));
+      row.replaceChildren(inp);
+      inp.focus();
+      inp.select();
+    };
+    const more = (x, i, row, btn) => openMenu(btn, [
+      { label: 'Reword', run: () => reword(x, row) },
+      i > 0 ? { label: 'Move up', run: () => step({ op: 'move', itemId: x.id, to: i - 1 }) } : null,
+      i < v.items.length - 1 ? { label: 'Move down', run: () => step({ op: 'move', itemId: x.id, to: i + 1 }) } : null,
+      x.skip ? { label: 'Needed after all', run: () => step({ op: 'unskip', itemId: x.id }) } : { label: 'Not needed', run: () => step({ op: 'skip', itemId: x.id }) },
+      { label: 'Remove', run: () => step({ op: 'remove', itemId: x.id }) },
+    ].filter(Boolean));
     const draw = () => {
-      const done = v.items.filter((x) => x.done).length;
-      bar.style.width = v.items.length ? `${Math.round((done / v.items.length) * 100)}%` : '0';
-      count.textContent = v.items.length ? `${done} of ${v.items.length}` : '';
-      box.replaceChildren(...v.items.map((x) => {
-        const cb = h('input', { type: 'checkbox', checked: x.done, 'aria-label': x.text });
+      const need = v.items.filter((x) => !x.skip), done = need.filter((x) => x.done).length;
+      bar.style.width = need.length ? `${Math.round((done / need.length) * 100)}%` : '0';
+      count.textContent = v.items.length ? `${done} of ${need.length}` + (need.length < v.items.length ? ` · ${v.items.length - need.length} not needed` : '') : '';
+      box.replaceChildren(...v.items.map((x, i) => {
+        const cb = h('input', { type: 'checkbox', checked: x.done, disabled: !!x.skip, 'aria-label': x.text });
         cb.addEventListener('change', () => step({ op: cb.checked ? 'tick' : 'untick', itemId: x.id }));
-        return h('div', { class: 'pj-cl-row' + (x.done ? ' done' : '') }, h('label', { class: 'pick' }, cb, h('span', {}, x.text)), x.done && x.by ? h('small', {}, `${x.by} · ${ago(x.at)}`) : null,
-          runs ? h('button', { class: 'pj-it-x', 'aria-label': 'Remove', onclick: () => step({ op: 'remove', itemId: x.id }) }, '×') : null);
+        const row = h('div', { class: 'pj-cl-row' + (x.done ? ' done' : '') + (x.skip ? ' skip' : ''), 'data-step': x.id }, h('label', { class: 'pick' }, cb, h('span', {}, x.text)),
+          x.skip ? h('small', { class: 'pj-cl-skip' }, 'Not needed') : x.done && x.by ? h('small', {}, `${x.by} · ${ago(x.at)}`) : null);
+        if (runs) { const btn = h('button', { class: 'pj-cl-more', 'aria-label': 'Change this step', title: 'Reword, move, not needed, remove', onclick: () => more(x, i, row, btn) }, '⋯'); row.append(btn); }
+        return row;
       }));
     };
     const add = runs ? h('input', { class: 'pj-it-in', placeholder: '+ Add a step' }) : null;

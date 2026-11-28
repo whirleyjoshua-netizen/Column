@@ -130,6 +130,21 @@ try {
   ok(await A.until(`${P('.pj-panel .pj-cl-row.done small')}?.textContent.startsWith('Ada ·')`), 'ticking a step shows who ticked it');
   await A.ev(`(() => { const i = ${P('.pj-panel .pj-items .pj-it-in[placeholder="+ Add a step"]')}; i.value = 'Haul away the old blinds'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
   ok(await A.until(`[...document.querySelectorAll('#projects .pj-panel .pj-cl-row')].at(-1)?.textContent.includes('Haul away the old blinds') && ${P('.pj-panel .pj-cl-row.done')} !== null`), '+ Add a step adds one at the end, and the tick stays');
+  // ⋯ on a step (whoever runs the job): reword it, move it, mark it not needed (tests/job_tasks.mjs).
+  const rows = `[...document.querySelectorAll('#projects .pj-panel .pj-cl-row')]`;
+  const menuPick = async (label) => { await A.until(`[...document.querySelectorAll('#menu button')].some((b) => b.textContent === ${JSON.stringify(label)})`); await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === ${JSON.stringify(label)}).click(); true`); };
+  await A.tap(`${rows}.at(-1).querySelector('.pj-cl-more')`);
+  await menuPick('Reword');
+  ok(await A.until(`!!${P('.pj-panel .pj-cl-edit')} && document.activeElement === ${P('.pj-panel .pj-cl-edit')}`), '⋯ → Reword turns the step into a box to write in');
+  await A.ev(`(() => { const i = ${P('.pj-panel .pj-cl-edit')}; i.value = 'Haul away the old blinds and brackets'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
+  ok(await A.until(`${rows}.at(-1)?.querySelector('.pick span')?.textContent === 'Haul away the old blinds and brackets'`), 'Enter saves the new words');
+  await A.tap(`${rows}.at(-1).querySelector('.pj-cl-more')`);
+  await menuPick('Move up');
+  ok(await A.until(`${rows}.at(-2)?.textContent.includes('Haul away the old blinds and brackets')`), '⋯ → Move up moves it up one');
+  await A.tap(`${rows}.at(-2).querySelector('.pj-cl-more')`);
+  await menuPick('Not needed');
+  ok(await A.until(`${rows}.at(-2)?.classList.contains('skip') && ${rows}.at(-2).querySelector('.pj-cl-skip')?.textContent === 'Not needed' && ${rows}.at(-2).querySelector('input').disabled`), '⋯ → Not needed keeps it on the list, struck out, marked Not needed');
+  ok(await A.until(`/not needed/.test(${P('.pj-panel .pj-cl-n')}?.textContent || '')`), 'and the count says how many aren’t needed: ' + await A.ev(`${P('.pj-panel .pj-cl-n')}?.textContent`));
   await shot('board-job');
   // Delete a column that has a job: its jobs move.
   await menu('Leads', 'Delete column');

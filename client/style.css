@@ -5335,3 +5335,9 @@ body:not(.wide) .kapp-grid { grid-template-columns: 1fr; }
 .cb-cl-tasks { font-family: inherit; line-height: 1.6; }
 .cc-kind { font-size: 11px; padding: 1px 8px; }
 @media (max-width: 640px) { .cb-kinds { grid-template-columns: 1fr; } }
+/* A job's checklist: a step not needed stays on the list, struck out; ⋯ to reword, move, skip or remove. */
+.pj-cl-row.skip .pick span { text-decoration: line-through; color: var(--muted); font-style: italic; }
+.pj-cl-row .pj-cl-skip { font-style: italic; }
+.pj-cl-more { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+.pj-cl-more:hover, .pj-cl-more:focus-visible { background: var(--soft); color: var(--text); }
+.pj-cl-edit { flex: 1; min-width: 0; }

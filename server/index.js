@@ -2603,7 +2603,7 @@ function jobStackOfItem(x) {
 // A job is gone (or its list, or its board): its stack and the stack's files go as a deleted campaign's do.
 // Everything that goes with a deleted record (one, or its list's or board's): its visits, draft invoices, runs, gear
 // links, campaign links and job stack.
-function recordGoneAll(rec) { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); jobStackGone(rec); }
+function recordGoneAll(rec) { dropVisits(rec); INV.dropFor(rec); JF.dropFor(rec); campsOffJob(rec); jcGone(rec); jobStackGone(rec); }
 function jobStackGone(rec) {
   const ws = db.workspaces[rec.wsId];
   if (!ws) return;
@@ -3001,7 +3001,8 @@ function broadcast(wsId, msg) {
   for (const s of set) if (hide && s.readyState === 1 && (!seesItemDir(inDir, s.meta.memberId) || (msg.type === 'item:update' && !seesOwn('item', inDir, s.meta.memberId)))) s.send(hide);
   const task = msg.task?.id && db.tasks[msg.task.id];
   const isMsg = msg.item && db.items[msg.item.id]?.type === 'message';
-  const sees = (mid) => !(isMsg && chatOffFor(db.workspaces[wsId], mid)) && seesCampaign(campaignId, mid) && seesFeed(feed, mid, db.workspaces[wsId]) && (!boundSt || seesStack(boundSt, mid, db.workspaces[wsId])) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
+  const jobSteps = !!db.campaigns[campaignId]?.jobId; // a job's Checklist lives on its job card (the record), not in anyone's app state
+  const sees = (mid) => !jobSteps && !(isMsg && chatOffFor(db.workspaces[wsId], mid)) && seesCampaign(campaignId, mid) && seesFeed(feed, mid, db.workspaces[wsId]) && (!boundSt || seesStack(boundSt, mid, db.workspaces[wsId])) && seesItemDir(inDir, mid) && seesTemplate(msg.template, mid) && seesEntry(msg.entry, mid) && (!msg.forMember || msg.forMember === mid) && (!msg.forAdmins || isAdminId(wsId, mid)) && (!msg.bill || seesBill(wsId, msg.bill, mid)) && (!inDir || seesOwn('item', inDir, mid)) && (!task || seesOwn('task', task, mid)) && PJ.seesMsg(msg, mid) && (!msg.boardId || !WB || WB.seesMsg(msg, mid));
   const live = (s) => s.readyState === 1 && (!s.meta.token || db.tokens[s.meta.token]) && db.workspaces[wsId]?.members.some((x) => x.id === s.meta.memberId);
   for (const s of set) if (!live(s) && s.readyState === 1) s.close(4001, 'Signed out');
   for (const s of set) if (live(s) && sees(s.meta.memberId)) s.send(pricedData && PJ.seesPrices(wsId, s.meta.memberId) ? pricedData : data);
@@ -3020,6 +3021,7 @@ const labelList = (v, max) => [...new Set((Array.isArray(v) ? v : []).map((o) =>
 function seesCampaign(campaignId, memberId) {
   const c = campaignId && db.campaigns[campaignId];
   if (isJobRun(c)) return !!PJ.recordAt(c.recordId, c.wsId, memberId); // a Job Flow run: whoever sees its job
+  if (c?.jobId) return !!PJ.recordAt(c.jobId, c.wsId, memberId); // a job's Checklist: whoever sees its job
   const cast = !!c && castOf(c).some((r) => r.memberIds.includes(memberId));
   if (c && ownOnly(c.wsId, memberId)) return c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || cast || taskCamps(c.wsId, memberId).has(c.id);
   return !c || !c.private || c.ownerId === memberId || c.assigneeId === memberId || c.memberIds.includes(memberId) || cast;
@@ -3242,7 +3244,8 @@ const maySignOff = (t, auth) => isAdmin(auth) || taskCamp(t)?.ownerId === auth.m
 // checklists and work orders, marks them in progress, logs calls, comments. A Job Flow run keeps its own rules.
 // tests/campaign_lock.mjs
 const PLAN_ONLY = 'Only whoever runs this campaign, or an admin, can change its plan.';
-const plansCampaign = (c, auth) => !c || isJobRun(c) || isAdmin(auth) || (!!auth?.memberId && (c.ownerId === auth.memberId || c.assigneeId === auth.memberId));
+const plansCampaign = (c, auth) => !c || isJobRun(c) || isAdmin(auth) || (c.jobId ? !!db.records[c.jobId] && PJ.mayEditJob(db.records[c.jobId], auth) // a job's Checklist: whoever runs the job
+  : !!auth?.memberId && (c.ownerId === auth.memberId || c.assigneeId === auth.memberId));
 const campOfGoal = (goalId) => db.campaigns[db.goals[goalId]?.campaignId];
 // What someone who doesn't run the campaign may change on one of its tasks: finishing it (theirs, one nobody is on
 // yet, or theirs to sign off), In progress, ticks on its checklist (not its items), and a work order's materials used
@@ -3250,7 +3253,10 @@ const campOfGoal = (goalId) => db.campaigns[db.goals[goalId]?.campaignId];
 function workOnlyEdit(ws, t, body, auth) {
   const keys = Object.keys(body || {}).filter((k) => body[k] !== undefined);
   if (keys.some((k) => !['done', 'status', 'checklist', 'wo', 'sendBack'].includes(k))) return PLAN_ONLY;
-  const doer = (!t.assigneeId && !t.roleId && !t.castId) || taskDoers(ws, t).includes(auth.memberId);
+  // A job's Checklist: whoever is on the job ticks (its lead, maker or an admin, or someone on one of its visits).
+  const job = db.records[taskCamp(t)?.jobId];
+  const doer = job ? taskDoers(ws, t).includes(auth.memberId) || PJ.mayEditJob(job, auth) || PJ.onVisit(job, auth.memberId)
+    : (!t.assigneeId && !t.roleId && !t.castId) || taskDoers(ws, t).includes(auth.memberId);
   if ((body.done !== undefined || body.status !== undefined) && !doer && !maySignOff(t, auth)) return 'Only whoever it’s for ticks it off.';
   if (body.checklist !== undefined) {
     const was = t.checklist || [], now = Array.isArray(body.checklist) ? body.checklist : [];
@@ -3746,9 +3752,9 @@ function createCampaign(ws, owner, body, extra = {}) {
   db.campaigns[c.id] = c;
   save();
   broadcast(ws.id, { type: 'campaign', campaign: publicCampaign(c) });
-  broadcast(ws.id, { type: 'workspace' });
+  if (c.type !== 'checklist') broadcast(ws.id, { type: 'workspace' }); // a Checklist has no feed or stack to tell of
   // After its steps are in (a saved campaign's come right after this), for "a campaign is started".
-  setImmediate(() => db.campaigns[c.id] && automate(ws.id, 'campaign.started', { campaign: db.campaigns[c.id], who: owner.member, whoId: owner.memberId }));
+  if (!c.jobId) setImmediate(() => db.campaigns[c.id] && automate(ws.id, 'campaign.started', { campaign: db.campaigns[c.id], who: owner.member, whoId: owner.memberId }));
   return c;
 }
 // A campaign given its job: its tasks that aren't about a job yet become this job's (not ones given none on purpose),
@@ -3764,6 +3770,91 @@ function campTasksToJob(c, was = null) {
 function campsOffJob(rec) {
   for (const c of Object.values(db.campaigns)) if (c.recordId === rec.id) { c.recordId = null; broadcast(c.wsId, { type: 'campaign', campaign: publicCampaign(c) }); }
 }
+
+// ---------- a job's Checklist (the owner, 2026-11-27: "any group of tasks should be considered a campaign") ----------
+// tests/job_tasks.mjs. A job list's checklist field is a copy of a Checklist linked by c.jobId (never c.recordId: Job
+// Flows takes a job with a recordId campaign for one run on campaign steps). Each step is a task (t.itemId is the
+// field item's id) in the Checklist's one phase, in the field's order; a step "not needed" is a skipped task. Kept in
+// step both ways: a change to the field (the job card, a whole-list save, the API, an import) lands on the tasks
+// (jcFromField, from recordNews), and a change to the tasks lands on the field (jcToField). Who sees it is who sees the
+// job; who changes it is PJ.mayEditJob; who ticks: that, or someone on one of the job's visits.
+const jcField = (rec) => { const p = rec && db.projects[rec.projectId]; const t = p && PJ.typeOfP(p, rec.typeId); return PJ.isJobT(t) ? t.fields.find((f) => f.type === 'checklist') || null : null; };
+const jcOf = (recId) => { for (const c of Object.values(db.campaigns)) if (c.jobId === recId) return c; return null; };
+const jcTasks = (c) => goalsInOrder(c).flatMap((g) => tasksInOrder(g));
+let jcSyncing = false;
+function jcFromField(rec) {
+  if (jcSyncing || !rec || !db.records[rec.id]) return;
+  const f = jcField(rec);
+  const ws = f && db.workspaces[rec.wsId];
+  if (!ws) return;
+  const items = rec.values[f.id]?.items || [];
+  let c = jcOf(rec.id);
+  if (!c && !items.length) return;
+  if (!c) {
+    const maker = ws.members.find((m) => m.id === rec.memberId) || ws.members.find((m) => m.role === 'owner');
+    const p = db.projects[rec.projectId];
+    c = createCampaign(ws, { memberId: maker?.id || null, member: maker?.name || 'Kloomie' }, { name: String(PJ.recName(p, rec) || 'Job').slice(0, 80), type: 'checklist' }, { jobId: rec.id });
+  }
+  let g = goalsInOrder(c)[0];
+  if (!g) {
+    g = applyGoal({ id: rid(), wsId: ws.id, campaignId: c.id, by: c.by, createdAt: Date.now(), title: '', due: null, kind: 'tasks', target: 10, counts: null, order: 0 }, { title: 'Steps' }, c);
+    db.goals[g.id] = g;
+    broadcast(ws.id, { type: 'goal', goal: publicGoal(g) });
+  }
+  const have = new Map(jcTasks(c).filter((t) => t.itemId).map((t) => [t.itemId, t]));
+  const keep = new Set();
+  items.forEach((x, i) => {
+    let t = have.get(x.id);
+    let changed = false;
+    if (!t) {
+      t = applyTask({ id: rid(), wsId: ws.id, by: c.by, memberId: c.ownerId, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: g.id, assigneeId: null }, { text: x.text });
+      t.itemId = x.id;
+      db.tasks[t.id] = t;
+      changed = true;
+    }
+    if (t.text !== x.text) { t.text = x.text; changed = true; }
+    if (t.order !== i) { t.order = i; changed = true; }
+    if (!!t.skipped !== !!x.skip) { t.skipped = !!x.skip; changed = true; }
+    if (!!t.done !== !!x.done) {
+      Object.assign(t, x.done ? { done: true, doneAt: x.at || Date.now(), doneBy: x.by || null, doneById: ws.members.find((m) => m.name === x.by)?.id || null } : { done: false, doneAt: null, doneBy: null, doneById: null });
+      changed = true;
+    }
+    keep.add(t.id);
+    if (changed) broadcast(ws.id, { type: 'task', task: publicTask(t) });
+  });
+  for (const t of jcTasks(c)) if (!keep.has(t.id)) deleteTask(t);
+  save();
+}
+// The tasks, onto the job's field (and its timeline, for a tick or a skip made on the task).
+function jcToField(c, by) {
+  const rec = c?.jobId && db.records[c.jobId];
+  const f = rec && jcField(rec);
+  if (!f) return;
+  const had = new Map((rec.values[f.id]?.items || []).map((x) => [x.id, x]));
+  const items = jcTasks(c).slice(0, 100).map((t) => {
+    t.itemId ||= rid(6);
+    const x = { id: t.itemId, text: cleanText(t.text, 200) || 'Step', done: !!t.done };
+    if (t.done) { x.by = t.doneBy || had.get(t.itemId)?.by || undefined; x.at = t.doneAt || had.get(t.itemId)?.at || Date.now(); if (!x.by) delete x.by; }
+    if (t.skipped) x.skip = true;
+    return x;
+  });
+  if (JSON.stringify(items) === JSON.stringify(rec.values[f.id]?.items || [])) return;
+  for (const x of items) {
+    const w = had.get(x.id);
+    const from = !w ? 'Not on the list' : w.done !== x.done ? (w.done ? 'Done' : 'Not done') : !!w.skip !== !!x.skip ? (w.skip ? 'Not needed' : 'Needed') : w.text !== x.text ? w.text : null;
+    const to = !w ? 'Added' : w.done !== x.done ? (x.done ? 'Done' : 'Not done') : !!w.skip !== !!x.skip ? (x.skip ? 'Not needed' : 'Needed') : w.text !== x.text ? x.text : null;
+    if (from) PJ.recordActivity(rec.id, { kind: 'change', field: `${f.name}: ${w?.text || x.text}`, fieldId: f.id, from, to, by: by || 'Kloomie' });
+  }
+  for (const [id, w] of had) if (!items.some((x) => x.id === id)) PJ.recordActivity(rec.id, { kind: 'change', field: `${f.name}: ${w.text}`, fieldId: f.id, from: 'On the list', to: 'Removed', by: by || 'Kloomie' });
+  if (items.length) rec.values[f.id] = { items }; else delete rec.values[f.id];
+  rec.updatedAt = Date.now();
+  jcSyncing = true;
+  try { PJ.recordNews(rec, 'record.updated', by || 'Kloomie'); } finally { jcSyncing = false; }
+}
+// The job is gone: so is its Checklist.
+function jcGone(rec) { const c = jcOf(rec.id); const ws = c && db.workspaces[c.wsId]; if (ws) deleteCampaign(ws, c); }
+// Jobs from before Checklists: their steps move over once, ticks kept (a job with one already is left alone).
+function jcMoveAll() { for (const rec of Object.values(db.records)) { const f = jcField(rec); if (f && rec.values[f.id]?.items?.length && !jcOf(rec.id)) jcFromField(rec); } }
 // Repeat runs share a name, so their feeds get -2, -3…
 function freeChannelName(ws, raw) {
   for (let i = 1; ; i++) {
@@ -8964,6 +9055,13 @@ async function api(req, res, url) {
   }
 
   // A job's visits: list, schedule, change, cancel.
+  // A job's Checklist, as tasks (tests/job_tasks.mjs), for whoever sees the job.
+  if (a === 'records' && c === 'steps' && m === 'GET' && !d) {
+    const at = PJ.recordAt(b, ws.id, auth.memberId);
+    if (!at) return send(res, 404, { error: 'That job is gone.' });
+    const cl = jcOf(at.rec.id);
+    return send(res, 200, cl ? { campaign: publicCampaign(cl), goals: goalsInOrder(cl).map(publicGoal), tasks: jcTasks(cl).map(publicTask) } : { campaign: null, goals: [], tasks: [] });
+  }
   if (a === 'records' && c === 'visits') {
     const at = PJ.recordAt(b, ws.id, auth.memberId);
     if (!at) return send(res, 404, { error: 'That job is gone.' });
@@ -9166,9 +9264,10 @@ async function api(req, res, url) {
       start: startList(ws, auth),
       items,
       entries: Object.values(db.entries).filter((e) => e.wsId === ws.id && canSee(auth, 'entry', e)).map(publicEntry),
-      tasks: Object.values(db.tasks).filter((t) => t.wsId === ws.id && canSee(auth, 'task', t)).map(publicTask),
-      campaigns: Object.values(db.campaigns).filter((c) => c.wsId === ws.id && canSee(auth, 'campaign', c)).map(publicCampaign),
-      goals: Object.values(db.goals).filter((g) => g.wsId === ws.id && canSee(auth, 'goal', g)).map(publicGoal),
+      // A job's Checklist is on its job card (its checklist field), so it stays out of the Campaigns list and Tasks.
+      tasks: Object.values(db.tasks).filter((t) => t.wsId === ws.id && !taskCamp(t)?.jobId && canSee(auth, 'task', t)).map(publicTask),
+      campaigns: Object.values(db.campaigns).filter((c) => c.wsId === ws.id && !c.jobId && canSee(auth, 'campaign', c)).map(publicCampaign),
+      goals: Object.values(db.goals).filter((g) => g.wsId === ws.id && !db.campaigns[g.campaignId]?.jobId && canSee(auth, 'goal', g)).map(publicGoal),
       attempts: Object.values(db.attempts).filter((x) => x.wsId === ws.id && canSee(auth, 'attempt', x)).map(publicAttempt),
       lists: Object.values(db.lists).filter((l) => l.wsId === ws.id && canSee(auth, 'list', l)).map(publicList),
       templates: Object.values(db.templates).filter((t) => t.wsId === ws.id && seesTemplate(t, auth.memberId)).map(publicTemplate),
@@ -9379,6 +9478,7 @@ async function api(req, res, url) {
       broadcast(ws.id, { type: 'task', task: publicTask(t) });
       hook(ws.id, 'task.created', () => API.apiTask(t), auth.member);
       if (t.goalId && t.assigneeId) resyncVisibility(ws.id, [t.assigneeId]);
+      if (taskCamp(t)?.jobId) jcToField(taskCamp(t), auth.member); // a job's Checklist: onto the job
       return send(res, 200, publicTask(t));
     }
     const t = b && db.tasks[b];
@@ -9467,13 +9567,16 @@ async function api(req, res, url) {
       if (signNews) broadcast(ws.id, { ...signNews, task: publicTask(next) });
       // A campaign task handed to someone new opens (or closes) that campaign for them.
       if (next.goalId && (next.assigneeId !== t.assigneeId || next.goalId !== t.goalId)) resyncVisibility(ws.id, [t.assigneeId, next.assigneeId]);
+      for (const x of new Set([taskCamp(t), taskCamp(next)])) if (x?.jobId) jcToField(x, auth.member); // a job's Checklist: onto the job
       return send(res, 200, publicTask(next));
     }
     if (m === 'DELETE') {
       if (!plansCampaign(campOfGoal(t.goalId), auth)) return send(res, 403, { error: PLAN_ONLY });
       // Its subtasks stay, as tasks of their own.
       for (const x of Object.values(db.tasks)) if (x.parentId === t.id) { delete x.parentId; broadcast(ws.id, { type: 'task', task: publicTask(x) }); }
+      const was = taskCamp(t);
       deleteTask(t);
+      if (was?.jobId) jcToField(was, auth.member);
       save();
       return send(res, 200, { ok: true });
     }
@@ -12811,7 +12914,7 @@ const hold = (...a) => RULES.hold(...a);
 const PJ = projectsModule({ jobCurrentWho: (rec) => JF.currentWho(rec), onTouch: (rec) => JF.wake(rec.id), docsOf, bizHtml, inkedPng, jobQuote: (rec) => JF.jobQuote(rec), seesLinked: (kind, x, memberId) => canSee({ memberId }, kind, x), proofUrl: (ws) => pagesProof(ws), onEvent: (...a) => recordEvent(...a), onPrice: (...a) => priceChanged(...a), canSeeItem: (auth, it) => canSee(auth, 'item', it), seal, unseal, db, save, broadcast, rid, hold, cleanText, isDay, readJson, send, badRequest, isOwnerId, escHtml, brandOf, logoUrl, teamDay, offline, allowLocalHooks: process.env.ALLOW_LOCAL_WEBHOOKS === '1', qrSvg, publicUrl: PUBLIC_URL,
   onRecordGone: (rec) => recordGoneAll(rec), stageGate: (...a) => stageGate(...a),
  onMade: (rec) => jobMade(rec),
-  onRecordNews: (rec) => { jobChanged(rec); jobChatFollow(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
+  onRecordNews: (rec) => { jobChanged(rec); jobChatFollow(rec); jcFromField(rec); if (rec.share || rec.qbo?.estId) QB.soon(rec.wsId); },
   // A follow-up from a record's timeline: a task for whoever logged it, about the record.
   makeTask: (ws, auth, { text, due, recordId }) => {
     const t = applyTask({ id: rid(), wsId: ws.id, by: auth.member, createdAt: Date.now(), text: '', done: false, doneAt: null, due: null, priority: 0, goalId: null, assigneeId: null }, { text, due, assigneeId: auth.memberId, recordId });
@@ -14092,6 +14195,7 @@ migrateDay();
 PJ.moveLicensesOut();
 // Chat and stacks together (docs/jobflows/JOBCHAT.md §7): each team once; the job-chat safety net starts from now.
 { let changed = false; for (const ws of Object.values(db.workspaces)) { if (chatStacksMigrate(ws)) changed = true; if (!ws.chatFolders.some((f) => f.jobs)) { chatFolderFor(ws, 'jobs', 'Jobs'); changed = true; } /* the Jobs chat folder is always there (JOBCHAT.md §13) */ if (ws.jobChatsSince === undefined) { ws.jobChatsSince = Date.now(); changed = true; } } if (changed) save(); }
+jcMoveAll();
 PJ.reseeAll(); // who sees each job now, so the first change after a restart tells only those it changes for
 dropCutImports();
 flowsStart();

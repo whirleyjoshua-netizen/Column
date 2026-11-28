@@ -99,6 +99,11 @@ try {
   // Unticking an item reopens the work step (live), and ticking it again finishes it again.
   await rico('PATCH', '/records/' + job.id, { values: { checklist: { ...cl, items: cl.items.map((i, n) => ({ ...i, done: n > 0 })) } } });
   ok(await at('work'), 'unticking a checklist item reopens the work step');
+  // A step marked not needed counts as done (tests/job_tasks.mjs: crews skip steps that don't apply).
+  await rico('PATCH', '/records/' + job.id, { values: { checklist: { ...cl, items: cl.items.map((i, n) => (n === 0 ? { ...i, done: false, skip: true } : { ...i, done: true })) } } });
+  ok(await at('invoice'), 'the unticked one marked not needed: the work step is done');
+  await rico('PATCH', '/records/' + job.id, { values: { checklist: { ...cl, items: cl.items.map((i, n) => ({ ...i, done: n > 0 })) } } });
+  ok(await at('work'), 'needed again: it’s open again');
   await rico('PATCH', '/records/' + job.id, { values: { checklist: { ...cl, items: cl.items.map((i) => ({ ...i, done: true })) } } });
   ok(await at('invoice'), 'ticking it again finishes it again');
 
