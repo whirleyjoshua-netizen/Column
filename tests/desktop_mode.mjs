@@ -49,9 +49,9 @@ try {
   ok(await P.until(`!document.querySelector('#app')?.classList.contains('hidden') && !!document.querySelector('#menuBtn')`, 20000), 'the desktop app signs in');
   let w = await P.ev(win);
   ok(w.w >= 330 && w.w <= 360 && Math.abs(w.x + w.w - (w.sl + w.sw)) <= 2, `it starts as a column docked to the right edge (${JSON.stringify(w)})`);
-  ok(await P.ev(`!document.body.classList.contains('wide') && getComputedStyle(document.querySelector('#menuBtn')).display !== 'none'`), 'the column has the drawer (☰)');
+  ok(await P.until(`!document.body.classList.contains('wide') && document.querySelectorAll('#appDock > button').length === 5`), 'the column has the five places down its rail (the redesign, 2026-11-28)');
   // Settings → Window → Full size.
-  await P.ev(`document.querySelector('#menuBtn').click(); document.querySelector('#settingsBtn').click(); true`);
+  await P.ev(`document.querySelector('#gearBtn').click(); true`);
   // Settings is a list of pages in a column (2026-11-20); the window switch is under Notifications (this device).
   await P.until(`!!document.querySelector('#settings .setx-item[data-page=notify]')`);
   await P.ev(`document.querySelector('#settings .setx-item[data-page=notify]').click(); true`);

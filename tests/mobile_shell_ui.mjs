@@ -48,7 +48,8 @@ try {
 
   // Home first, with the menu and settings icons up top (Sidekick moves to the menu page).
   ok(await A.until(`!document.querySelector('#home').classList.contains('hidden')`), 'it opens on Home');
-  ok(await A.ev(vis('#menuBtn')) && await A.ev(vis('#gearBtn')) && !(await A.ev(vis('#skBtn'))), 'the top bar has the menu and settings icons');
+  // The redesign (2026-11-28): no ☰ up top; Home and More are in the tab bar (tests/ui_revamp_ui.mjs).
+  ok(!(await A.ev(vis('#menuBtn'))) && await A.ev(vis('#gearBtn')) && !(await A.ev(vis('#skBtn'))), 'the top bar has the settings icon, and no ☰');
   ok(!(await A.ev(vis('#topTabs'))), 'no row of tabs across the top');
 
   // Home: widgets side by side, swiped one at a time, with dots.
@@ -62,47 +63,37 @@ try {
   await A.ev(`document.querySelectorAll('#home .home-dots i')[2].click(); true`);
   ok(await A.until(`[...document.querySelectorAll('#home .home-dots i')].findIndex((x) => x.classList.contains('on')) === 2`), 'tapping a dot goes to that widget: ' + await A.ev(`(() => { const g = document.querySelector('#home .home-grid'); return JSON.stringify({ sl: g.scrollLeft, offs: [...g.children].map((c) => c.offsetLeft), cw: g.clientWidth, on: [...document.querySelectorAll('#home .home-dots i')].findIndex((x) => x.classList.contains('on')), same: g.isConnected }); })()`));
 
-  // The dock: four apps at the bottom.
-  ok(await A.ev(vis('#appDock')), 'a dock at the bottom');
+  // The tab bar: five fixed places at the bottom (the redesign, 2026-11-28; it was a dock of four you picked).
+  ok(await A.ev(vis('#appDock')), 'a tab bar at the bottom');
   ok(await A.ev(`(() => { const d = document.querySelector('#appDock').getBoundingClientRect(); return d.bottom >= 844 - 2 && d.top > 844 - 130; })()`), 'pinned to the bottom of the screen');
-  ok(await A.ev(`[...document.querySelectorAll('#appDock .dock-app')].map((b) => b.dataset.go).join()`) === 'tab:day,tool:chat,tab:contacts,tab:camps', 'four apps: Tasks, Chat, Contacts, then Campaigns while Boards is switched off: ' + await A.ev(`[...document.querySelectorAll('#appDock .dock-app')].map((b) => b.dataset.go).join()`));
-  ok(await A.ev(`[...document.querySelectorAll('#appDock .dock-app')].every((b) => b.querySelector('.app-ic svg') && b.querySelector('.app-l').textContent)`), 'each an icon with its name under it');
+  ok(await A.ev(`[...document.querySelectorAll('#appDock .dock-app')].map((b) => b.dataset.go).join()`) === 'go:home,tab:day,go:new,tool:chat,go:more', 'Home, Tasks (a team with no jobs), +, Chat, More: ' + await A.ev(`[...document.querySelectorAll('#appDock .dock-app')].map((b) => b.dataset.go).join()`));
+  ok(await A.ev(`[...document.querySelectorAll('#appDock .dock-app')].every((b) => b.querySelector('.app-ic svg') && b.querySelector('.app-l').textContent)`), 'each an icon with its name');
   await A.ev(`document.querySelector('#appDock [data-go="tab:day"]').click(); true`);
   ok(await A.until(`!document.querySelector('#day').classList.contains('hidden') && document.querySelector('#appDock [data-go="tab:day"]').classList.contains('on')`), 'Tasks opens from the dock, and its icon lights');
   await A.shot('phone-tasks');
   ok(await A.ev(`(() => { const d = document.querySelector('#appDock').getBoundingClientRect(), s = document.querySelector('#day').getBoundingClientRect(); return s.bottom <= d.top + 1 || JSON.stringify([s.top, s.bottom, d.top]); })()`) === true, 'the page ends above the dock: ' + await A.ev(`(() => { const d = document.querySelector('#appDock').getBoundingClientRect(), s = document.querySelector('#day').getBoundingClientRect(), m = document.querySelector('#main').getBoundingClientRect(); return JSON.stringify({ day: [s.top, s.bottom], dock: d.top, main: [m.top, m.bottom, getComputedStyle(document.querySelector('#main')).paddingBottom] }); })()`));
-  ok(await A.ev(vis('#homeBtn')), 'away from Home, a Home icon up top');
-  await A.ev(`document.querySelector('#homeBtn').click(); true`);
-  ok(await A.until(`!document.querySelector('#home').classList.contains('hidden')`), 'which goes back Home');
+  ok(!(await A.ev(vis('#homeBtn'))), 'away from Home, no house up top: Home is in the tab bar');
+  await A.ev(`document.querySelector('#appDock [data-go="go:home"]').click(); true`);
+  ok(await A.until(`!document.querySelector('#home').classList.contains('hidden') && document.querySelector('#appDock [data-go="go:home"]').classList.contains('on')`), 'which goes back Home');
 
-  // The menu page: not a drawer.
-  await A.ev(`document.querySelector('#menuBtn').click(); true`);
-  ok(await A.until(`!document.querySelector('#menuPage').classList.contains('hidden')`), '☰ opens the menu page');
+  // More: a page, not a drawer; a list of every page and tool.
+  await A.ev(`document.querySelector('#appDock [data-go="go:more"]').click(); true`);
+  ok(await A.until(`!document.querySelector('#menuPage').classList.contains('hidden')`), 'More opens its page');
   ok(!(await A.ev(`document.querySelector('#app').classList.contains('side-open')`)), 'not the drawer');
   await A.shot('phone-menu');
-  const tiles = await A.ev(`[...document.querySelectorAll('#menuPage .app-tile-btn')].map((b) => b.dataset.go)`);
-  ok(['tab:day', 'tab:contacts', 'tab:camps', 'tab:docs', 'tool:chat', 'tool:column', 'tab:apps', 'go:settings'].every((k) => tiles.includes(k)), 'icons for every page and tool: ' + tiles.join());
-  ok((await A.ev(`[...document.querySelectorAll('#menuPage .menu-sec h2')].map((x) => x.textContent).join('|')`)).startsWith('Workspace|Tools'), 'grouped: Workspace, Tools…');
-  ok(await A.ev(`(() => { const b = [...document.querySelectorAll('#menuPage .app-tile-btn')].slice(0, 4).map((x) => x.getBoundingClientRect()); return b[0].top === b[3].top && b[0].width < 110; })()`), 'four across, like a phone’s home screen');
+  const tiles = await A.ev(`[...document.querySelectorAll('#menuPage .more-row')].map((b) => b.dataset.go)`);
+  ok(['tab:day', 'tab:contacts', 'tab:camps', 'tab:docs', 'tool:chat', 'tool:column', 'tab:apps', 'go:settings'].every((k) => tiles.includes(k)), 'a row for every page and tool: ' + tiles.join());
+  ok((await A.ev(`[...document.querySelectorAll('#menuPage .menu-sec h2')].map((x) => x.textContent).join('|')`)).includes('Settings & help'), 'grouped by what people do');
   await A.ev(`document.querySelector('#menuPage [data-go="tab:contacts"]').click(); true`);
-  ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#menuPage').classList.contains('hidden')`), 'a menu icon opens its page');
-  await A.ev(`document.querySelector('#menuBtn').click(); true`);
+  ok(await A.until(`!document.querySelector('#tool').classList.contains('hidden') && document.querySelector('#menuPage').classList.contains('hidden')`), 'a row opens its page');
+  await A.ev(`document.querySelector('#appDock [data-go="go:more"]').click(); true`);
   await A.until(`!document.querySelector('#menuPage').classList.contains('hidden')`);
   await A.ev(`document.querySelector('#menuPage [data-go="tab:apps"]').click(); true`);
   ok(await A.until(`!document.querySelector('#apps').classList.contains('hidden')`), 'Apps & Integrations too');
-
-  // Change the dock.
-  await A.ev(`document.querySelector('#menuBtn').click(); true`);
-  await A.until(`!document.querySelector('#menuPage').classList.contains('hidden')`);
-  await A.ev(`document.querySelector('#menuPage .dock-edit').click(); true`);
-  ok(await A.until(`document.querySelectorAll('#sheet select.dock-pick').length === 4`), 'Edit the dock: four slots to pick from');
-  await A.shot('phone-dock-edit');
-  await A.ev(`(() => { const s = document.querySelectorAll('#sheet select.dock-pick')[3]; s.value = 'tab:apps'; s.dispatchEvent(new Event('change')); return true; })()`);
-  await A.ev(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent === 'Save').click(); true`);
-  ok(await A.until(`[...document.querySelectorAll('#appDock .dock-app')].map((b) => b.dataset.go).join() === 'tab:day,tool:chat,tab:contacts,tab:apps'`), 'the fourth is now Apps & Integrations');
+  ok(!(await A.ev(`document.body.textContent.includes('Edit the dock')`)), 'the tab bar is fixed: no Edit the dock');
 
   // Widgets: pick which show.
-  await A.ev(`document.querySelector('#homeBtn').click(); true`);
+  await A.ev(`document.querySelector('#appDock [data-go="go:home"]').click(); true`);
   await A.until(`!document.querySelector('#home').classList.contains('hidden')`);
   ok(await A.until(`!!document.querySelector('#home .home-card.today')`), 'Today is a widget');
   await A.ev(`document.querySelector('#home .widgets-edit').click(); true`);
@@ -111,12 +102,12 @@ try {
   await A.ev(`[...document.querySelectorAll('#sheet button')].find((b) => b.textContent === 'Save').click(); true`);
   ok(await A.until(`!document.querySelector('#home .home-card.today')`), 'hiding Today takes it off Home');
   await A.ev(`location.reload(); true`).catch(() => {});
-  ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && document.querySelectorAll('#home .home-grid > .home-card').length >= 3`, 15000) && !(await A.ev(`!!document.querySelector('#home .home-card.today')`)) && await A.ev(`document.querySelector('#appDock [data-go="tab:apps"]') !== null`), 'the dock and widgets stay as Ada left them');
+  ok(await A.until(`!document.querySelector('#app').classList.contains('hidden') && document.querySelectorAll('#home .home-grid > .home-card').length >= 3`, 15000) && !(await A.ev(`!!document.querySelector('#home .home-card.today')`)), 'the widgets stay as Ada left them');
 
-  // Typing: the dock steps aside for the keyboard.
-  await A.ev(`document.querySelector('#appDock [data-go="tab:contacts"]').click(); true`);
-  const field = `[...document.querySelectorAll('input[type=search], input:not([type]), input[type=text], textarea')].find((e) => e.getBoundingClientRect().width > 0)`;
-  await A.until(`!!${field}`);
+  // Typing: the tab bar steps aside for the keyboard (More's search box).
+  await A.ev(`document.querySelector('#appDock [data-go="go:more"]').click(); true`);
+  await A.until(`!document.querySelector('#menuPage').classList.contains('hidden')`);
+  const field = `document.querySelector('#menuPage .more-q')`;
   await A.ev(`${field}.focus(); true`);
   ok(await A.until(`!${vis('#appDock')}`), 'while typing, the dock hides');
   await A.ev(`document.activeElement.blur(); true`);
@@ -131,7 +122,7 @@ try {
   await A.cmd('Emulation.setTouchEmulationEnabled', { enabled: false });
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 420, height: 900, deviceScaleFactor: 1, mobile: false });
   await A.cmd('Emulation.setEmulatedMedia', { features: [{ name: 'hover', value: 'hover' }, { name: 'pointer', value: 'fine' }] });
-  await A.ev(`document.querySelector('#homeBtn')?.click(); true`);
+  await A.ev(`document.querySelector('#appDock [data-go="go:home"]')?.click(); true`);
   ok(await A.until(`document.body.classList.contains('column') && ${vis('#home .home-next')}`), 'in a docked column, arrows step through the widgets');
   await A.shot('column-home');
 

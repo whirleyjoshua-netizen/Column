@@ -99,7 +99,7 @@ try {
   // apps sit in a dock at the bottom, and pins are on the menu page. mobile_shell_ui.mjs has the rest.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 340, height: 860, deviceScaleFactor: 1, mobile: false });
   ok(await A.until(`!document.body.classList.contains('wide')`), 'a 340px column isn’t wide');
-  ok(await A.until(`!${shown('#side')}`, 2000) && (await A.ev(shown('#menuBtn'))) && (await A.ev(shown('#appDock'))), 'the toolbar is hidden, with ☰ in the header and the dock at the bottom');
+  ok(await A.until(`!${shown('#side')}`, 2000) && !(await A.ev(shown('#menuBtn'))) && (await A.ev(shown('#appDock'))), 'the toolbar is hidden; the five places are on a rail (the redesign, 2026-11-28: no ☰)');
   await sleep(300);
   ok(await A.ev(`(() => { document.querySelector('#tabs [data-tab=agents]').focus(); return document.activeElement !== document.querySelector('#tabs [data-tab=agents]'); })()`), 'the hidden toolbar can’t be tabbed into');
   ok(await A.ev(`document.body.classList.contains('column')`) && !(await A.ev(shown('#topTabs'))), 'no row of tabs across the top');
@@ -110,19 +110,19 @@ try {
   await A.ev(`location.reload(); true`);
   await A.until(`!document.querySelector('#app').classList.contains('hidden')`, 20000);
   ok(!(await A.ev(shown('#topTabs'))), 'pinning something doesn’t bring the row back');
-  await A.tap(`document.querySelector('#menuBtn')`);
-  ok(await A.until(shown('#menuPage')) && !(await A.ev(shown('#side'))), '☰ opens the menu page, not a drawer');
-  ok(await A.ev(`!!document.querySelector('#menuPage [data-go="pin:camp:${campId}"]')`) || await A.ev(`[...document.querySelectorAll('#menuPage [data-go^="pin:"]')].length === 1`), 'the pin is on the menu page');
+  await A.tap(`document.querySelector('#appDock [data-go="go:more"]')`);
+  ok(await A.until(shown('#menuPage')) && !(await A.ev(shown('#side'))), 'More opens its page, not a drawer');
+  ok(await A.ev(`!!document.querySelector('#menuPage [data-go="pin:camp:${campId}"]')`) || await A.ev(`[...document.querySelectorAll('#menuPage [data-go^="pin:"]')].length === 1`), 'the pin is in More');
   await A.ev(`document.querySelector('#menuPage [data-go^="pin:"]').scrollIntoView({ block: 'center' }); true`);
   await A.tap(`document.querySelector('#menuPage [data-go^="pin:"]')`);
   ok(await A.until(`!${shown('#menuPage')} && !document.querySelector('#campsWrap').classList.contains('hidden')`), 'tapping it opens the campaign');
-  await A.tap(`document.querySelector('#menuBtn')`);
+  await A.tap(`document.querySelector('#appDock [data-go="go:more"]')`);
   await A.until(shown('#menuPage'));
   await A.ev(`document.querySelector('#menuPage [data-go="tool:column"]').scrollIntoView({ block: 'center' }); true`);
   await A.tap(`document.querySelector('#menuPage [data-go="tool:column"]')`);
   ok(await A.until(`!document.querySelector('#panes').classList.contains('hidden') && !!document.querySelector('#split #panes') && document.querySelector('#split .split-title').textContent === 'Stacks'`), 'Stacks from the menu opens it, in the split (the whole screen in a column)');
   await A.ev(`document.querySelector('#split .split-close').click(); true`);
-  await A.tap(`document.querySelector('#menuBtn')`);
+  await A.tap(`document.querySelector('#appDock [data-go="go:more"]')`);
   await A.until(shown('#menuPage'));
   await A.ev(`document.querySelector('#menuPage [data-go="tab:docs"]').scrollIntoView({ block: 'center' }); true`);
   await A.tap(`document.querySelector('#menuPage [data-go="tab:docs"]')`);
@@ -133,13 +133,13 @@ try {
   // A phone: the same, with touch; a swipe from the edge no longer pulls out a drawer.
   await A.cmd('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await A.cmd('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
-  ok(await A.until(`!document.body.classList.contains('column')`, 3000) && !(await A.ev(shown('#topTabs'))) && (await A.ev(shown('#appDock'))), 'a phone has the dock and no row across the top');
-  await A.ev(`document.querySelector('#homeBtn').click(); true`);
+  ok(await A.until(`!document.body.classList.contains('column')`, 3000) && !(await A.ev(shown('#topTabs'))) && (await A.ev(shown('#appDock'))), 'a phone has the tab bar and no row across the top');
+  await A.ev(`document.querySelector('#appDock [data-go="go:home"]').click(); true`);
   await A.swipe(4, 200);
   ok(!(await A.ev(shown('#side'))), 'a swipe in from the left edge leaves the page alone');
   ok(await A.ev(`document.documentElement.scrollWidth <= innerWidth`), 'nothing spills sideways on a phone');
-  const tapH = await A.ev(`(() => { document.querySelector('#menuBtn').click(); const hs = [...document.querySelectorAll('#menuPage .app-tile-btn, #appDock .dock-app')].map((b) => b.getBoundingClientRect().height); return Math.min(...hs); })()`);
-  ok(tapH >= 44, `menu and dock icons are big enough to tap (${tapH}px)`);
+  const tapH = await A.ev(`(() => { document.querySelector('#appDock [data-go="go:more"]').click(); const hs = [...document.querySelectorAll('#menuPage .more-row, #appDock .dock-app')].map((b) => b.getBoundingClientRect().height); return Math.min(...hs); })()`);
+  ok(tapH >= 44, `More's rows and the tab bar are big enough to tap (${tapH}px)`);
 
   // The pages around the app are white too.
   for (const p of ['reset.html', 'request.html', 'sign.html']) {

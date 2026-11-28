@@ -184,7 +184,9 @@ ok(await strip() === '', 'no strip on a phone');
 await A.ev(`document.querySelector('#tool h2 button').click(); document.querySelector('#tabs [data-tab=tools]').click(); true`);
 ok(await A.until(menuOn), 'on a phone, Tools drops its list down too');
 await A.ev(`document.querySelector('#menu [data-tool=bills]').click(); true`);
-ok(await A.until(`(${split})?.w === innerWidth`, 3000) || (await A.ev(`(() => { const r = document.querySelector('#split').getBoundingClientRect(); return !document.querySelector('#split').classList.contains('hidden') && Math.round(r.width) === innerWidth; })()`)), 'on a phone a tool fills the screen');
+// (A narrow window with a mouse is a docked column: since the redesign, 2026-11-28, its five places run down a rail at the left, and the tool fills the rest.)
+const railW = `(document.body.classList.contains('column') ? Math.round(document.querySelector('#appDock').getBoundingClientRect().width) : 0)`;
+ok(await A.until(`(${split})?.w === innerWidth - ${railW}`, 3000) || (await A.ev(`(() => { const r = document.querySelector('#split').getBoundingClientRect(); return !document.querySelector('#split').classList.contains('hidden') && Math.round(r.width) === innerWidth - ${railW}; })()`)), 'on a phone a tool fills the screen (beside the rail in a column)');
 ok(await A.ev(`getComputedStyle(document.querySelector('#split .split-size')).display === 'none'`), 'with no full-size button (it is already)');
 await A.ev(`document.querySelector('#split .split-close').click(); true`);
 await A.ev(`document.querySelector('#tool h2 button').click(); true`);

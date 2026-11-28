@@ -1314,8 +1314,11 @@
       }
     };
     code.addEventListener('keydown', (e) => e.key === 'Enter' && confirm());
-    const bar = h('div', { id: 'confirmBar', class: 'confirm-bar' },
-      h('span', {}, S.me.pendingEmail ? 'Confirm your new email: enter the code we sent to ' : 'Confirm your email: enter the code we sent to ', h('b', {}, to)),
+    // On a phone or in a docked column it's one line until Enter code (the audit, 2026-11-28: it took a sixth of the screen).
+    const bar = h('div', { id: 'confirmBar', class: 'confirm-bar' + (S.confirmOpen ? ' open' : '') },
+      h('span', { class: 'cb-long' }, S.me.pendingEmail ? 'Confirm your new email: enter the code we sent to ' : 'Confirm your email: enter the code we sent to ', h('b', {}, to)),
+      h('span', { class: 'cb-short' }, S.me.pendingEmail ? 'Confirm your new email' : 'Confirm your email'),
+      h('button', { class: 'btn small cb-enter', 'data-act': 'cb-open', onclick: () => { S.confirmOpen = true; drawConfirmBar(); setTimeout(() => $('#confirmBar .cb-code')?.focus(), 30); } }, 'Enter code'),
       code,
       h('button', { class: 'btn small', onclick: confirm }, 'Confirm'),
       h('button', { class: 'btn small', onclick: () => api('POST', '/account/verify/send').then(() => toast('New code sent'), (e) => toast(e.message)) }, 'Send a new code'),
@@ -3296,6 +3299,8 @@
   };
   const TAB_IC = {
     home: svg('<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>'),
+    plus: svg('<path d="M12 5v14M5 12h14"/>'),
+    more: svg('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>'),
     day: svg('<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>'),
     column: svg('<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>'),
     whiteboard: svg('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M7 9h4M7 12h7M12 17l-3 4M12 17l3 4"/>'),
@@ -3312,7 +3317,7 @@
     tools: svg('<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>'),
     sidekick: svg('<path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/>'),
     docs: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'),
-    projects: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
+    projects: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16M5.5 8h2M11.5 8h1.5M17 8h1.5M5.5 11.5h2M11.5 11.5h1.5"/>'),
     bills: svg('<path d="M12 3v18M16.5 7.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3S9.5 10.5 12 11s4.5 1.3 4.5 3.5-2 3-4.5 3-4.5-1.3-4.5-3"/>'),
     contacts: svg('<circle cx="12" cy="9" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>'),
     jobs: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 12h18"/>'),
@@ -3543,7 +3548,7 @@
       openMenu(e.currentTarget, items);
     };
     sheet('Your pins', [
-      h('p', { class: 'muted' }, 'One job, project, campaign, feed, stack or doc you keep going back to, one tap away in Workspace’s top bar (across the top on a phone). Only you see your pins.'),
+      h('p', { class: 'muted' }, 'One job, project, campaign, feed, stack or doc you keep going back to, one tap away in Workspace’s top bar (in More on a phone or in a docked column). Only you see your pins.'),
       pinList,
       h('button', { class: 'btn small', onclick: addPin }, '+ Pin something'),
     ], async () => {
@@ -3623,7 +3628,7 @@
     $('#menuBtn').setAttribute('aria-expanded', 'false');
   }
   // On a phone or in a docked column ☰ goes to the menu page (the owner, 2026-11-19: "not a drop down"), and back.
-  $('#menuBtn').addEventListener('click', (e) => (!wideMq.matches ? (S.tab === 'menu' ? goHome(MENU.back) : openMenuPage()) : sideOpen() ? closeSide() : openSide(e.detail === 0)));
+  $('#menuBtn').addEventListener('click', (e) => (!wideMq.matches ? (S.tab === 'menu' ? goHome(MENU.back) : openMenuPage()) : sideOpen() ? closeSide() : openSide(e.detail === 0))); // hidden when narrow: More is in the tab bar
   $('#sideClose').addEventListener('click', closeSide);
   $('#scrim').addEventListener('click', closeSide);
   $('#sideFold').addEventListener('click', () => { SIDE.folded = !SIDE.folded; store.set('sideFolded', SIDE.folded); sideLayout(); });
@@ -3714,6 +3719,9 @@
     if (kind === 'tab') { if (k === 'apps') return openApps(); clearCovers(); return openBarItem(k); }
     if (kind === 'tool') { const { ROWS } = toolRows(); if (toolOpen !== k) clearCovers(); return ROWS[k]?.run ? ROWS[k].run() : openTool(k); }
     if (kind === 'pin') return openPin(k);
+    if (k === 'home') return goHome();
+    if (k === 'more') return openMenuPage();
+    if (k === 'new') return newSheet();
     if (k === 'settings') return openSettingsPage();
     if (k === 'sidekick') return openTool('sidekick');
     if (k === 'help') return window.open('/help', '_blank', 'noopener');
@@ -3721,47 +3729,100 @@
   function appOn(go) {
     const i = go.indexOf(':'), kind = go.slice(0, i), k = go.slice(i + 1);
     const covered = toolOpen || splitOpen || !$('#projects').classList.contains('hidden') || !$('#settings').classList.contains('hidden');
-    if (kind === 'tab') return k === 'projects' ? !$('#projects').classList.contains('hidden') : BAR_ITEMS[k]?.view || k === 'apps' ? S.tab === k && !covered : toolOpen === k;
+    if (k === 'home') return S.tab === 'home' && !covered;
+    if (k === 'more') return S.tab === 'menu' && !covered;
+    if (kind === 'tab' && k === 'jobs' && jobSolo() && !$('#projects').classList.contains('hidden')) return true; // a job opened from Jobs
+    if (kind === 'tab') return k === 'projects' ? !$('#projects').classList.contains('hidden') && !jobSolo() : BAR_ITEMS[k]?.view || k === 'apps' ? S.tab === k && !covered : toolOpen === k;
     if (kind === 'tool') return toolOpen === k || splitOpen === k || (k === 'column' && S.tab === 'column' && !covered);
     if (kind === 'pin') { const [pk, id] = pinParts(k); return !!PIN_KINDS[pk]?.on(id); }
     return false;
   }
+  // More (the redesign, 2026-11-28): every place this person may open, as a list you can search, grouped by what people
+  // do rather than by how Kloomie is built. Anything not named below lands in More tools; pins come last.
+  const MORE_GROUPS = [
+    ['Run jobs', ['tab:jobs', 'tab:projects', 'tab:day', 'tool:map', 'tool:inventory', 'tab:automations']],
+    ['Sell', ['tab:contacts', 'tab:camps', 'tool:email']],
+    ['Talk', ['tool:chat', 'tool:meetings', 'tool:whiteboard']],
+    ['Files', ['tab:docs', 'tool:column', 'tool:templates', 'tool:vault']],
+    ['Money', ['tool:bills', 'tool:analytics']],
+    ['Team & AI', ['tab:agents', 'go:sidekick']],
+    ['Settings & help', ['tab:apps', 'go:settings', 'go:help']],
+  ];
+  function moreSections() {
+    const secs = appSections();
+    const all = new Map(secs.filter(([n]) => n !== 'Pinned').flatMap(([, list]) => list).map((x) => [x.go, x]));
+    const used = new Set();
+    const out = MORE_GROUPS.map(([name, keys]) => [name, keys.filter((k) => all.has(k)).map((k) => (used.add(k), all.get(k)))]);
+    const rest = [...all.values()].filter((x) => !used.has(x.go));
+    if (rest.length) out.splice(out.length - 1, 0, ['More tools', rest]);
+    out.push(['Your pins', secs.find(([n]) => n === 'Pinned')?.[1] || []]);
+    return out.filter(([, list]) => list.length);
+  }
   function renderMenuPage() {
     const root = $('#menuPage');
     if (!root || S.tab !== 'menu') return;
-    const tile = (x) => h('button', { class: 'app-tile-btn', 'data-go': x.go, onclick: () => appGo(x.go) }, appIcon(x), h('span', { class: 'app-l' }, x.name));
-    root.replaceChildren(h('div', { class: 'menu-wrap' },
-      ...appSections().filter(([, list]) => list.length).map(([name, list]) => h('section', { class: 'menu-sec' }, h('h2', {}, name), h('div', { class: 'menu-grid' }, list.map(tile)))),
-      h('div', { class: 'menu-foot' }, h('button', { class: 'btn dock-edit', onclick: dockSheet }, 'Edit the dock'), h('button', { class: 'btn', onclick: () => barSheet() }, 'Your pins'))));
+    const keepQ = root.querySelector('.more-q')?.value || '';
+    const row = (x) => h('button', { class: 'more-row', 'data-go': x.go, onclick: () => appGo(x.go) }, appIcon(x), h('span', { class: 'more-l' }, x.name), h('span', { class: 'more-chev', 'aria-hidden': 'true' }, '›'));
+    const secs = moreSections().map(([name, list]) => h('section', { class: 'menu-sec' }, h('h2', {}, name), h('div', { class: 'more-list' }, list.map(row))));
+    const q = h('input', { type: 'search', class: 'more-q', placeholder: 'Search Kloomie', 'aria-label': 'Search places', value: keepQ });
+    const none = h('p', { class: 'day-hint more-none', hidden: true }, 'Nothing by that name.');
+    const filter = () => {
+      const v = q.value.trim().toLowerCase();
+      let any = false;
+      for (const sec of secs) {
+        let shown = 0;
+        for (const b of sec.querySelectorAll('.more-row')) { const on = !v || b.textContent.toLowerCase().includes(v); b.hidden = !on; if (on) shown++; }
+        sec.hidden = !shown;
+        any ||= !!shown;
+      }
+      none.hidden = any;
+    };
+    q.addEventListener('input', filter);
+    root.replaceChildren(h('div', { class: 'menu-wrap' }, h('h1', { class: 'more-title' }, 'More'), q, none, ...secs,
+      h('div', { class: 'menu-foot' }, h('button', { class: 'btn', onclick: () => barSheet() }, 'Your pins'))));
+    filter();
   }
-  // The dock: four apps, chosen per device (a phone's dock is that phone's). Something gone is filled from the defaults.
-  const DOCK_DEFAULT = ['tab:day', 'tool:chat', 'tab:contacts', 'tab:projects'];
-  function dockKeys() {
+  // The tab bar (the redesign, 2026-11-28): five fixed places on a phone (at the bottom) and in a docked column (down a
+  // rail at the left): Home, the team's work (Jobs for a team with job lists, else Tasks), +, Chat, More.
+  function tabBarKeys() {
     const all = appIndex();
-    const saved = store.get('dock', null);
-    const out = (Array.isArray(saved) ? saved : DOCK_DEFAULT).filter((g) => all.has(g)).slice(0, 4);
-    for (const g of [...DOCK_DEFAULT, ...all.keys()]) { if (out.length >= 4) break; if (all.has(g) && !out.includes(g) && !g.startsWith('go:')) out.push(g); }
-    return out;
+    const work = all.has('tab:jobs') && hasJobLists() ? 'tab:jobs' : all.has('tab:day') ? 'tab:day' : null;
+    const talk = all.has('tool:chat') ? 'tool:chat' : all.has('tab:contacts') ? 'tab:contacts' : null;
+    return ['go:home', work, 'go:new', talk, 'go:more'].filter(Boolean);
   }
+  // (Function declarations: the tab bar draws while the app starts, before Jobs' and Boards' state further down exists.)
+  function hasJobLists() { return (S.projects || []).some((p) => (p.types || []).some((t) => !!t.trade || t.key === 'jobs')); }
+  function jobSolo() { try { return !!PR.solo; } catch { return false; } }
+  const BAR_SHORT = { 'go:home': 'Home', 'go:new': 'New', 'go:more': 'More', 'tab:jobs': 'Jobs', 'tab:day': 'Tasks', 'tool:chat': 'Chat', 'tab:contacts': 'Contacts' };
+  const BAR_TIP = { 'go:new': 'New job, task, message or contact', 'go:more': 'Everything else, and Settings' };
   function renderAppDock() {
     const nav = $('#appDock');
     if (!nav) return;
     const all = appIndex();
-    nav.replaceChildren(...dockKeys().map((g) => { const x = all.get(g); return h('button', { class: 'dock-app' + (appOn(g) ? ' on' : ''), 'data-go': g, title: x.name, onclick: () => appGo(g) }, appIcon(x), h('span', { class: 'app-l' }, x.name)); }));
-    longPress(nav, () => dockSheet());
+    const icon = (g) => (g === 'go:home' ? TAB_IC.home : g === 'go:new' ? TAB_IC.plus : g === 'go:more' ? TAB_IC.more : all.get(g)?.ic || TAB_IC.docs);
+    nav.replaceChildren(...tabBarKeys().map((g) => h('button', { class: 'dock-app' + (g === 'go:new' ? ' dock-new' : '') + (appOn(g) ? ' on' : ''), 'data-go': g, title: BAR_TIP[g] || all.get(g)?.name || BAR_SHORT[g], 'aria-label': BAR_TIP[g] || BAR_SHORT[g], onclick: () => appGo(g) },
+      h('span', { class: 'app-ic', html: icon(g) }), h('span', { class: 'app-l' }, BAR_SHORT[g] || all.get(g)?.name))));
   }
-  function dockSheet() {
-    const sections = appSections();
-    const now = dockKeys();
-    const picks = now.map((g) => {
-      const sel = h('select', { class: 'dock-pick' }, sections.filter(([, l]) => l.length).map(([name, list]) => h('optgroup', { label: name }, list.filter((x) => !x.go.startsWith('go:')).map((x) => h('option', { value: x.go }, x.name)))));
-      sel.value = g;
-      return sel;
-    });
-    sheet('Your dock', [h('p', { class: 'day-hint' }, 'The four apps at the bottom of the screen, left to right. This phone or window remembers them.'), ...picks.map((s, i) => h('label', { class: 'dock-slot' }, h('span', {}, String(i + 1)), s))], () => {
-      store.set('dock', picks.map((s) => s.value));
-      renderAppDock();
-    });
+  // + : make something, from anywhere. Only what this person may make.
+  function newSheet() {
+    const can = [
+      itemOk('jobs') && hasJobLists() ? ['job', 'New job', TAB_IC.jobs, () => { if (toolOpen !== 'jobs') { clearCovers(); openBarItem('jobs'); } let n = 0; const go = () => (JB.flows || ++n > 40 ? jbNewJob() : setTimeout(go, 150)); jbLoad(); go(); }] : null,
+      ['task', 'New task', TAB_IC.day, () => newTaskSheet()],
+      memberMay('chat') ? ['message', 'Message', TAB_IC.chat, () => { clearCovers(); openChat(); setTimeout(() => $('.chat-pane textarea, .chat-pane input.composer, #chat textarea')?.focus(), 300); }] : null,
+      itemOk('contacts') ? ['contact', 'New contact', TAB_IC.contacts, () => contactSheet(null)] : null,
+    ].filter(Boolean);
+    sheet('New', [h('div', { class: 'new-list' }, can.map(([k, label, ic, run]) => h('button', { class: 'more-row', 'data-new': k, onclick: () => { closeSheet(); setTimeout(run, 30); } }, h('span', { class: 'app-ic', html: ic }), h('span', { class: 'more-l' }, label), h('span', { class: 'more-chev', 'aria-hidden': 'true' }, '›'))))]);
+  }
+  function newTaskSheet() {
+    const text = h('input', { name: 'tasktext', placeholder: 'Call Sam at 3pm', maxlength: 500 });
+    const due = h('input', { type: 'date', name: 'taskdue', value: todayKey() });
+    sheet('New task', [h('label', {}, 'What', text), h('label', {}, 'Due', due)], async () => {
+      if (!text.value.trim()) throw new Error('Say what the task is.');
+      const t = parseTask(text.value.trim());
+      upsertTask(await api('POST', '/tasks', { ...t, ...(due.value && !t.due ? { due: due.value } : {}) }));
+      toast('Task added');
+    }, 'Add');
+    setTimeout(() => text.focus(), 50);
   }
   function openSettingsPage() {
     clearCovers();
@@ -4022,7 +4083,8 @@
       D.scrolledFor = k;
       const first = [...blocks, ...pins].sort((a, b) => a.start - b.start)[0];
       const target = isToday ? nowMin() - 60 : first ? first.start - 30 : 8 * 60;
-      D.scroll.scrollTop = tl.offsetTop + y(Math.max(h0 * 60, target)) - 8;
+      // What's due (or anytime) sits above the timeline: open on it rather than scrolled past it (the audit, 2026-11-28).
+      D.scroll.scrollTop = D.scroll.querySelector('.anytime') ? 0 : tl.offsetTop + y(Math.max(h0 * 60, target)) - 8;
     } else D.scroll.scrollTop = keep;
   }
 
@@ -15912,6 +15974,8 @@
   function closeProjects() {
     if (splitOpen === 'projects') return; // a pinned board beside the page stays until its ✕
     PR.newing = null;
+    PR.solo = false; PR.soloBack = null;
+    $('#projects')?.classList.remove('pj-solo');
     if ($('#projects').classList.contains('hidden')) return;
     $('#projects').classList.add('hidden');
     markTabs();
@@ -15919,6 +15983,15 @@
   function renderProjects() {
     const root = $('#projects');
     if (!root) return;
+    if (PR.solo && !PR.panel) {
+      const back = PR.soloBack;
+      PR.solo = false; PR.soloBack = null;
+      root.classList.remove('pj-solo');
+      closeProjects();
+      if (back) openTool(back);
+      return;
+    }
+    root.classList.toggle('pj-solo', !!PR.solo);
     const p = projById(PR.open);
     if (!p) PR.open = null;
     if (!p && PR.newing && pjWide() && !PJN.redraw && $('#projects .pjn:not(.pjn-first)')) return;
@@ -19005,15 +19078,20 @@
   // From someone's Day: the job, open on that visit.
   async function openJob(projectId, recordId, visitId) {
     if (!projById(projectId)) return toast('That job is in a project you can’t open.');
+    const back = !wideMq.matches ? toolOpen : null;
     await openProject(projectId);
     const r = recById(projectId, recordId);
     if (!r) return toast('That job is gone.');
+    // Narrow: the job is a page of its own, not a sheet under its board; closing it goes back where you were.
+    PR.solo = !wideMq.matches;
+    PR.soloBack = back;
     PR.type = r.typeId;
     PR.view = null;
     PR.panel = r.id;
     PR.visit = visitId || null;
     await loadVisits(r, true);
     renderProjects();
+    shellMark();
   }
   // ----- Jobs and Job Flows (docs/jobflows/CONTRACTS.md): Workspace → Jobs. Every job on the team's job lists, the
   // flows they run on (owners and admins build them), New job from a flow, and on a job's Overview the step it's at
@@ -19241,7 +19319,7 @@
     flowSel.addEventListener('change', () => { JB.flow = flowSel.value; draw(); });
     draw();
     const chip = JB.pipe ? h('button', { type: 'button', class: 'chip jb-pipe-chip', 'data-act': 'clear-pipe', title: 'Show every job', onclick: () => { JB.pipe = null; renderTool(true); } }, `${JB.pipe.label} ✕`) : null;
-    return [h('div', { class: 'jb-bar' }, q, flowSel, chip, can.length ? h('button', { class: 'btn primary-btn', 'data-act': 'new-job', onclick: () => jbNewJob() }, '+ New job') : null), box];
+    return [h('div', { class: 'jb-bar' }, q, flowSel, chip, can.length || jbLists().length ? h('button', { class: 'btn primary-btn', 'data-act': 'new-job', onclick: () => jbNewJob() }, '+ New job') : null), box];
   }
   function jbRow(j) {
     const r = j.run;
@@ -19601,9 +19679,26 @@
   }
 
   // New job: which flow, what to call it, who it's for. The job and its run start together on the server.
+  // With no flow to start from, a job goes straight onto a job list (the audit, 2026-11-28: Jobs had no way to add one).
+  function jbNewPlainJob() {
+    const lists = jbLists().filter(({ p }) => !p.archived);
+    if (!lists.length) return toast('There’s no job list to add a job to yet.');
+    const listSel = h('select', { 'aria-label': 'Job list' }, lists.map(({ p, t }, i) => h('option', { value: String(i) }, lists.length > 1 && p.types.length > 1 ? `${p.name} · ${t.name}` : `${t.icon || ''} ${t.name}`.trim())));
+    const name = h('input', { name: 'jobname', placeholder: 'Dana Ruiz · 3 cans', maxlength: 200 });
+    sheet('New job', [lists.length > 1 ? h('label', {}, 'List', listSel) : null, h('label', {}, 'Job', name)].filter(Boolean), async () => {
+      const { p, t } = lists[Number(listSel.value) || 0];
+      if (!name.value.trim()) throw new Error('Give the job a name.');
+      const key = t.primary || t.fields.find((f) => f.key === 'job')?.id || t.fields[0]?.id;
+      await api('POST', `/projects/${p.id}/records`, { typeId: t.id, values: { [key]: name.value.trim() } });
+      PR.records.delete(p.id);
+      toast('Job added');
+      jbLoad(true);
+    }, 'Add');
+    setTimeout(() => name.focus(), 50);
+  }
   function jbNewJob(flowId) {
     const can = jbStartable();
-    if (!can.length) return toast('There’s no flow to start a job on yet.');
+    if (!can.length) return jbNewPlainJob();
     const key = 'nj-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
     const flowSel = h('select', { 'aria-label': 'Flow' }, can.map((f) => h('option', { value: f.id, selected: f.id === (flowId || store.get('jbLastFlow', '')) }, `${f.icon || ''} ${f.name}`.trim())));
     const name = h('input', { placeholder: 'Dana Ruiz · 3 cans', maxlength: 200 });

@@ -173,8 +173,8 @@ try {
   await A.ev(`document.querySelector('#projects [aria-label="Close Boards"]')?.click(); true`);
   await sleep(300);
   // On a phone (2026-11-19) Sidekick is an icon on the menu page (☰), not a button in the header.
-  await A.tap(`document.querySelector('#menuBtn')`);
-  ok(await A.until(shown('#menuPage [data-go="go:sidekick"]')) && !(await A.ev(shown('#skBtn'))), 'on a phone, ✦ Sidekick is on the menu page');
+  await A.tap(`document.querySelector('#appDock [data-go="go:more"]')`);
+  ok(await A.until(shown('#menuPage [data-go="go:sidekick"]')) && !(await A.ev(shown('#skBtn'))), 'on a phone, ✦ Sidekick is in More');
   await A.tap(`document.querySelector('#menuPage [data-go="go:sidekick"]')`);
   await A.until(shown('#skDock'));
   await sleep(300);
