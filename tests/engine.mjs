@@ -70,7 +70,7 @@ try {
   ok(r.status === 200, 'a formula field is added');
   const fx = (pr) => pr.types[0].fields.find((f) => f.name === 'Total');
   let tot = fx(r.body.project);
-  ok(tot && /\{#\w+\}/.test(tot.expr) && !tot.expr.includes('{Price}'), 'it’s kept by field id, so renaming a field doesn’t break it');
+  ok(tot && /\{#[\w-]+\}/.test(tot.expr) && !tot.expr.includes('{Price}'), 'it’s kept by field id, so renaming a field doesn’t break it');
   const fid = (name) => (r.body.project.types[0].fields.find((f) => f.name === name) || {}).id;
   const rec = (await rico('POST', `/projects/${bp.id}/records`, { typeId: bt.id, values: { [fid('Price')]: '120.50', [fid('Qty')]: 3, [fid('Rush')]: true } })).body;
   ok(rec.values[tot.id] === 41150, `its value is worked out on the server, in cents for money (${rec.values[tot.id]})`);
