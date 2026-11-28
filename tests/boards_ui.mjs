@@ -125,6 +125,11 @@ try {
   await sleep(300);
   await A.tap(P('.pj-panel .pj-tab[data-tab=work]'));
   ok(await A.until(`document.querySelector('#projects .pj-panel').textContent.includes('Clean up')`), 'Checklist adds a checklist to every job, with steps to start (on its Work tab)');
+  // Ticking and adding go one step at a time, and the name on the tick is the server's (the team audit, 2026-11-28).
+  await A.tap(P('.pj-panel .pj-cl-row input[type=checkbox]'));
+  ok(await A.until(`${P('.pj-panel .pj-cl-row.done small')}?.textContent.startsWith('Ada ·')`), 'ticking a step shows who ticked it');
+  await A.ev(`(() => { const i = ${P('.pj-panel .pj-items .pj-it-in[placeholder="+ Add a step"]')}; i.value = 'Haul away the old blinds'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return true; })()`);
+  ok(await A.until(`[...document.querySelectorAll('#projects .pj-panel .pj-cl-row')].at(-1)?.textContent.includes('Haul away the old blinds') && ${P('.pj-panel .pj-cl-row.done')} !== null`), '+ Add a step adds one at the end, and the tick stays');
   await shot('board-job');
   // Delete a column that has a job: its jobs move.
   await menu('Leads', 'Delete column');

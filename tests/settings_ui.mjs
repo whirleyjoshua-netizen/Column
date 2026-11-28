@@ -74,7 +74,19 @@ try {
   await open('data');
   ok(await heads() === 'Export the team|Export your things|Leave or delete|Delete team|Clear items', 'Export & delete: exports first, then the danger zone: ' + await heads());
   ok(await A.ev(`[...document.querySelectorAll('#settings .danger-sec')].length === 3`), 'the three danger cards are marked as such');
-  // A member sees their own pages and the team's people, not the owners' ones.
+  // Removing someone says first what happens (the team audit, 2026-11-28); it was only Click again to confirm.
+  await fetch(APP + 'api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'join', workspace: 'Set ' + t, code: (await api('GET', '/state')).workspace.inviteCode, name: 'Ty', email: `ty${t}@t.test`, password: 'longenough3', device: 'Mac', deviceId: 'd3' }) });
+  await sleep(500);
+  await open('members');
+  await A.until(`[...document.querySelectorAll('#settings .srow.person')].some((r) => r.textContent.startsWith('Ty'))`);
+  await A.ev(`[...document.querySelectorAll('#settings .srow.person')].find((r) => r.textContent.startsWith('Ty')).querySelector('.icon-btn').click(); true`);
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Remove from team').click(); true`);
+  await A.ev(`[...document.querySelectorAll('#menu button')].find((b) => b.textContent === 'Click again to confirm').click(); true`);
+  ok(await A.until(`document.querySelector('#sheet .sheet h2')?.textContent.startsWith('Remove Ty?') && document.querySelector('#sheet .sheet').textContent.includes('start as a new person')`), 'Remove from team asks first, and says what happens');
+  ok((await api('GET', '/state')).workspace.members.some((m) => m.name === 'Ty'), 'Ty is still on the team until it’s confirmed');
+  await A.ev(`[...document.querySelectorAll('#sheet .btns button')].find((b) => b.textContent === 'Remove').click(); true`);
+  ok(await A.until(`!document.querySelector('#settings').textContent.includes('Ty ·') && [...document.querySelectorAll('.toast, #toast')].some((x) => /Ty is removed/.test(x.textContent))`), 'Remove takes Ty off, and says so');
+  // A member sees their own pages and the team's people, not the owners' ones (the invite code is new after a removal).
   const st = await api('GET', '/state');
   const mo = await (await fetch(APP + 'api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'join', workspace: 'Set ' + t, code: st.workspace.inviteCode, name: 'Mo', email: `mo${t}@t.test`, password: 'longenough2', device: 'Mac', deviceId: 'd2' }) })).json();
   await A.ev(`localStorage.setItem('column.token', JSON.stringify(${JSON.stringify(mo.token)})); location.reload(); true`).catch(() => {});
